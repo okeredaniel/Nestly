@@ -2,7 +2,7 @@
   "expo": {
     "name": "Nestly",
     "slug": "Nestly",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/nestly-icon.png",
     "scheme": "nestly",
@@ -10,16 +10,19 @@
     "runtimeVersion": {
       "policy": "appVersion"
     },
+    "updates": {
+      "url": "https://u.expo.dev/ce5ee872-22b3-4e06-b99c-9abdf1e4c730"
+    },
     "android": {
-      "package": "com.yourname.nestly",
+      "package": "com.dexphrite.nestly",
       "adaptiveIcon": {
-        "backgroundColor": "#FFFFFF",
-        "foregroundImage": "./assets/images/nestly-icon.png"
+        "backgroundColor": "#F4F3FC",
+        "foregroundImage": "./assets/images/adaptive-icon.png"
       },
       "predictiveBackGestureEnabled": false
     },
     "ios": {
-      "bundleIdentifier": "com.yourname.nestly",
+      "bundleIdentifier": "com.dexphrite.nestly",
       "supportsTablet": true
     },
     "web": {
@@ -36,7 +39,14 @@
           "imageWidth": 76
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Nestly to use the camera to scan visitor passes."
+        }
+      ],
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -7,14 +7,15 @@ import {
   Platform,
   Pressable,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   UIManager,
   View,
 } from 'react-native';
+
 import { Ionicons } from '@expo/vector-icons';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import {
   addDoc,
@@ -32,7 +33,7 @@ import AppTextField from '@/components/ui/AppTextField';
 import BackgroundBubbles from '@/components/ui/BackgroundBubbles';
 import BottomCard, { SheetTitle } from '@/components/ui/BottomCard';
 import PrimaryButton from '@/components/ui/PrimaryButton';
-import { colors, radius, typography } from '@/theme';
+import { radius, typography } from '@/theme';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -173,6 +174,75 @@ function Empty({
           <Text style={styles.emptyBtnText}>{action.label}</Text>
         </Pressable>
       )}
+    </View>
+  );
+}
+
+function DetailView({
+  item,
+  now,
+  canDelete,
+  onClose,
+  onDelete,
+}: {
+  item: Announcement;
+  now: number;
+  canDelete: boolean;
+  onClose: () => void;
+  onDelete: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View style={styles.detail}>
+      <BackgroundBubbles />
+      <ScrollView
+        contentContainerStyle={{
+          paddingTop: insets.top + 12,
+          paddingBottom: 48,
+          paddingHorizontal: 22,
+        }}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.detailBar}>
+          <Pressable onPress={onClose} hitSlop={12} style={styles.roundBtn}>
+            <Ionicons name="chevron-back" size={20} color={INK} />
+          </Pressable>
+          <Text style={styles.detailBarTitle}>Announcement</Text>
+          {canDelete ? (
+            <Pressable onPress={onDelete} hitSlop={12} style={styles.roundBtn}>
+              <Ionicons name="trash-outline" size={18} color="#C0392B" />
+            </Pressable>
+          ) : (
+            <View style={styles.roundBtn} />
+          )}
+        </View>
+
+        <View style={styles.tagRow}>
+          <Tag label={CATEGORY[item.category].label} bg={CATEGORY[item.category].tag} fg={CATEGORY[item.category].fg} />
+          <Text style={styles.metaMuted}>{readTime(item.body)}</Text>
+        </View>
+
+        <Text style={styles.detailTitle}>{item.title}</Text>
+
+        <View style={styles.authorRow}>
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>{initials(item.authorName)}</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.authorName} numberOfLines={1}>
+              {item.authorName}
+            </Text>
+            <Text style={styles.metaMuted}>{dateLabel(item.createdAt, now)}</Text>
+          </View>
+          <View style={styles.rolePill}>
+            <Text style={styles.rolePillText}>{ROLE_LABEL[item.authorRole]}</Text>
+          </View>
+        </View>
+
+        <View style={styles.rule} />
+        <Text style={styles.detailText}>{item.body}</Text>
+      </ScrollView>
     </View>
   );
 }
@@ -346,56 +416,17 @@ export default function NoticesBoard({
         onRequestClose={() => setSelectedId(null)}
         statusBarTranslucent
       >
-        {selected && (
-          <View style={styles.detail}>
-            <BackgroundBubbles />
-            <View style={styles.detailBar}>
-              <Pressable onPress={() => setSelectedId(null)} hitSlop={12} style={styles.roundBtn}>
-                <Ionicons name="chevron-back" size={20} color={INK} />
-              </Pressable>
-              <Text style={styles.detailBarTitle}>Announcement</Text>
-              {canDelete(selected) ? (
-                <Pressable onPress={() => askDelete(selected)} hitSlop={12} style={styles.roundBtn}>
-                  <Ionicons name="trash-outline" size={18} color="#C0392B" />
-                </Pressable>
-              ) : (
-                <View style={styles.roundBtn} />
-              )}
-            </View>
-
-            <ScrollView contentContainerStyle={styles.detailBody} showsVerticalScrollIndicator={false}>
-              <View style={styles.tagRow}>
-                <Tag
-                  label={CATEGORY[selected.category].label}
-                  bg={CATEGORY[selected.category].tag}
-                  fg={CATEGORY[selected.category].fg}
-                />
-                <Text style={styles.metaMuted}>{readTime(selected.body)}</Text>
-              </View>
-
-              <Text style={styles.detailTitle}>{selected.title}</Text>
-
-              <View style={styles.authorRow}>
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>{initials(selected.authorName)}</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.authorName} numberOfLines={1}>
-                    {selected.authorName}
-                  </Text>
-                  <Text style={styles.metaMuted}>{dateLabel(selected.createdAt, now)}</Text>
-                </View>
-                <View style={styles.rolePill}>
-                  <Text style={styles.rolePillText}>{ROLE_LABEL[selected.authorRole]}</Text>
-                </View>
-              </View>
-
-              <View style={styles.rule} />
-
-              <Text style={styles.detailText}>{selected.body}</Text>
-            </ScrollView>
-          </View>
-        )}
+        <SafeAreaProvider>
+          {selected && (
+            <DetailView
+              item={selected}
+              now={now}
+              canDelete={canDelete(selected)}
+              onClose={() => setSelectedId(null)}
+              onDelete={() => askDelete(selected)}
+            />
+          )}
+        </SafeAreaProvider>
       </Modal>
 
       {/* Composer */}
@@ -593,8 +624,6 @@ export default function NoticesBoard({
   );
 }
 
-const TOP = Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) + 8 : 56;
-
 const styles = StyleSheet.create({
   wrap: { marginBottom: 24 },
 
@@ -604,17 +633,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 8,
-    marginBottom: 9,
+
   },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 14 },
 sectionTitle: {
-  ...typography.h1,
-  color: INK,
-  fontSize: 24,
-  fontFamily: 'PlusJakartaSans_800ExtraBold',
-  textShadowColor: INK,
-  textShadowOffset: { width: 0.6, height: 0 },
-  textShadowRadius: 0.6,
+    ...typography.h1,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    fontSize: 30,
+    lineHeight: 36,
+    letterSpacing: -0.6,
+    color: '#0F0A2E',
+    marginTop: 10,
+    marginBottom: 10
 },
   link: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13, color: PRIMARY },
   addBtn: {
@@ -624,6 +654,7 @@ sectionTitle: {
     backgroundColor: PRIMARY,
     alignItems: 'center',
     justifyContent: 'center',
+    // marginTop: 10,
   },
 
   // search + chips
@@ -756,15 +787,13 @@ sectionTitle: {
   detail: {
     flex: 1,
     backgroundColor: '#F7F4FF',
-    paddingTop: TOP,
     overflow: 'hidden',
   },
   detailBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingBottom: 10,
+    marginBottom: 10,
   },
   roundBtn: {
     width: 38,
@@ -775,7 +804,6 @@ sectionTitle: {
     backgroundColor: '#F6F4F9',
   },
   detailBarTitle: { fontFamily: 'PlusJakartaSans_900ExtraBold', fontSize: 16, color: INK },
-  detailBody: { paddingHorizontal: 22, paddingTop: 12, paddingBottom: 48 },
   detailTitle: {
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     fontSize: 26,

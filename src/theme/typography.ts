@@ -6,6 +6,11 @@ export const fonts = {
   extrabold: 'PlusJakartaSans_800ExtraBold',
 };
 
+export const fonts2 = {
+  dela: 'DelaGothicOne_400Regular',
+  syne: 'Syne_700Bold',
+};
+
 export const typography = {
   h1: { fontSize: 29, fontFamily: fonts.extrabold, lineHeight: 34 },
   h2: { fontSize: 22, fontFamily: fonts.bold, lineHeight: 28 },

@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
+  Easing,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,17 +15,19 @@ import { Ionicons } from '@expo/vector-icons';
 import { collection, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/context/AuthContext';
+import { useScreenIntro } from '@/hooks/useScreenIntro';
 import { db } from '@/lib/firebase';
 import AppModal from '@/components/ui/AppModal';
 import BottomCard, { SheetTitle } from '@/components/ui/BottomCard';
 import PrimaryButton from '@/components/ui/PrimaryButton';
+import AvatarImage from '@/components/ui/Avatar';
 import { colors, radius, typography } from '../../src/theme';
 
 type IconName = keyof typeof Ionicons.glyphMap;
 type MemberRole = 'admin' | 'resident' | 'security' | 'facility';
 type EditableRole = Exclude<MemberRole, 'admin'>;
 type Filter = 'all' | EditableRole;
-type Member = { id: string; name: string; email: string; unit: string; role: MemberRole };
+type Member = { id: string; name: string; email: string; unit: string; role: MemberRole; photoURL?: string | null };
 
 const ROLE_STYLE: Record<MemberRole, { label: string; plural: string; tint: string; bg: string }> = {
   admin: { label: 'Admin', plural: 'Admin', tint: '#0F0A2E', bg: 'rgba(15,10,46,0.08)' },
@@ -55,71 +59,136 @@ const ROLE_OPTIONS: { role: EditableRole; icon: IconName; desc: string }[] = [
   { role: 'facility', icon: 'construct-outline', desc: 'Manages facilities, bookings and issues' },
 ];
 
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'resident', label: 'Residents' },
-  { key: 'security', label: 'Security' },
-  { key: 'facility', label: 'Facility' },
+const FILTERS: { key: Filter; label: string; icon: IconName }[] = [
+  { key: 'all', label: 'All', icon: 'apps' },
+  { key: 'resident', label: 'Residents', icon: 'home' },
+  { key: 'security', label: 'Security', icon: 'shield-checkmark' },
+  { key: 'facility', label: 'Facility', icon: 'construct' },
 ];
 
-/* ------------------------------ Small parts ------------------------------ */
+/* ------------------------------ Motion parts ------------------------------ */
 
-function Avatar({ member, size = 50 }: { member: Member; size?: number }) {
-  const badge = Math.round(size * 0.4);
+// Fades and lifts its children in when they first appear.
+function Reveal({
+  index = 0,
+  style,
+  children,
+}: {
+  index?: number;
+  style?: any;
+  children: React.ReactNode;
+}) {
+  const vRef = useRef(new Animated.Value(0));
+  const v = vRef.current;
+  useEffect(() => {
+    Animated.timing(v, {
+      toValue: 1,
+      duration: 420,
+      delay: Math.min(index, 8) * 55,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [v, index]);
   return (
-    <View style={{ width: size, height: size }}>
-      <LinearGradient
-        colors={AVATAR_GRADIENT[member.role]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={{
-          width: size,
-          height: size,
-          borderRadius: size / 2,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <Text style={[styles.avatarText, { fontSize: size * 0.4 }]}>
-          {member.name.charAt(0).toUpperCase()}
-        </Text>
-      </LinearGradient>
-      <View
-        style={[
-          styles.avatarBadge,
-          { width: badge, height: badge, borderRadius: badge / 2 },
-        ]}
-      >
-        <Ionicons name={ROLE_ICON[member.role]} size={badge * 0.55} color={ROLE_STYLE[member.role].tint} />
-      </View>
-    </View>
+    <Animated.View
+      style={[
+        style,
+        {
+          opacity: v,
+          transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }],
+        },
+      ]}
+    >
+      {children}
+    </Animated.View>
   );
 }
 
-function MemberCard({
+// Pressable with a soft spring squish.
+function Tap({
+  onPress,
+  style,
+  wrapStyle,
+  disabled,
+  hitSlop,
+  children,
+}: {
+  onPress: () => void;
+  style?: any;
+  wrapStyle?: any;
+  disabled?: boolean;
+  hitSlop?: number;
+  children: React.ReactNode;
+}) {
+  const sRef = useRef(new Animated.Value(1));
+  const s = sRef.current;
+  const to = (value: number) =>
+    Animated.spring(s, { toValue: value, useNativeDriver: true, speed: 40, bounciness: 6 }).start();
+  return (
+    <Pressable
+      disabled={disabled}
+      onPress={onPress}
+      onPressIn={() => to(0.96)}
+      onPressOut={() => to(1)}
+      hitSlop={hitSlop}
+      style={wrapStyle}
+    >
+      <Animated.View style={[style, { transform: [{ scale: s }] }]}>{children}</Animated.View>
+    </Pressable>
+  );
+}
+
+// Gentle pulsing block for loading placeholders.
+function Pulse({ style }: { style: any }) {
+  const vRef = useRef(new Animated.Value(0));
+  const v = vRef.current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(v, { toValue: 1, duration: 800, useNativeDriver: true }),
+        Animated.timing(v, { toValue: 0, duration: 800, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [v]);
+  return (
+    <Animated.View
+      style={[style, { opacity: v.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }) }]}
+    />
+  );
+}
+
+/* ------------------------------ Small parts ------------------------------ */
+
+function Avatar({ member, size = 46 }: { member: Member; size?: number }) {
+  return (
+    <AvatarImage
+      uri={member.photoURL}
+      name={member.name}
+      size={size}
+      colors={AVATAR_GRADIENT[member.role]}
+    />
+  );
+}
+
+function MemberRow({
   member,
   editable,
   isYou,
+  last,
   onPress,
 }: {
   member: Member;
   editable: boolean;
   isYou: boolean;
+  last: boolean;
   onPress: () => void;
 }) {
   const rs = ROLE_STYLE[member.role];
-  const sub = member.unit ? `Unit ${member.unit}` : member.email || 'No details';
-  const subIcon: IconName = member.unit ? 'home-outline' : 'mail-outline';
 
   return (
-    <Pressable
-      disabled={!editable}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.card,
-        pressed && editable && { transform: [{ scale: 0.985 }], opacity: 0.95 },
-      ]}
-    >
+    <Tap onPress={onPress} disabled={!editable} style={[styles.row, !last && styles.rowDivider]}>
       <Avatar member={member} />
 
       <View style={{ flex: 1 }}>
@@ -133,36 +202,43 @@ function MemberCard({
             </View>
           )}
         </View>
-        <View style={styles.subRow}>
-          <Ionicons name={subIcon} size={13} color={colors.textMuted} />
+        {!!member.email && (
           <Text style={styles.sub} numberOfLines={1}>
-            {sub}
+            {member.email}
           </Text>
-        </View>
+        )}
+        {!!member.unit && (
+          <View style={styles.unitRow}>
+            <Ionicons name="home-outline" size={12} color={colors.primary} />
+            <Text style={styles.unitText} numberOfLines={1}>
+              Unit {member.unit}
+            </Text>
+          </View>
+        )}
+        {!member.email && !member.unit && (
+          <Text style={styles.sub}>No details</Text>
+        )}
       </View>
 
-      <View style={[styles.rolePill, { backgroundColor: rs.bg }]}>
-        <Text style={[styles.rolePillText, { color: rs.tint }]}>{rs.label}</Text>
-      </View>
-
-      {editable && (
-        <View style={styles.chevron}>
-          <Ionicons name="chevron-forward" size={15} color={colors.primary} />
+      <View style={styles.rowRight}>
+        <View style={[styles.rolePill, { backgroundColor: rs.bg }]}>
+          <Text style={[styles.rolePillText, { color: rs.tint }]}>{rs.label}</Text>
         </View>
-      )}
-    </Pressable>
+        {editable && <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />}
+      </View>
+    </Tap>
   );
 }
 
-function Skeleton() {
+function SkeletonRow({ last }: { last?: boolean }) {
   return (
-    <View style={styles.card}>
-      <View style={[styles.skel, { width: 50, height: 50, borderRadius: 25 }]} />
+    <View style={[styles.row, !last && styles.rowDivider]}>
+      <Pulse style={[styles.skel, { width: 46, height: 46, borderRadius: 23 }]} />
       <View style={{ flex: 1, gap: 8 }}>
-        <View style={[styles.skel, { width: '55%', height: 13 }]} />
-        <View style={[styles.skel, { width: '35%', height: 10 }]} />
+        <Pulse style={[styles.skel, { width: '55%', height: 13 }]} />
+        <Pulse style={[styles.skel, { width: '35%', height: 10 }]} />
       </View>
-      <View style={[styles.skel, { width: 64, height: 26, borderRadius: 13 }]} />
+      <Pulse style={[styles.skel, { width: 66, height: 24, borderRadius: 12 }]} />
     </View>
   );
 }
@@ -179,20 +255,30 @@ function EmptyState({
   action?: { label: string; onPress: () => void };
 }) {
   return (
-    <View style={styles.emptyShadow}>
-      <View style={styles.emptyCard}>
-        <LinearGradient colors={['#F1EBFF', '#E4DAFF']} style={styles.emptyIcon}>
-          <Ionicons name={icon} size={26} color={colors.primary} />
-        </LinearGradient>
-        <Text style={styles.emptyTitle}>{title}</Text>
-        <Text style={styles.emptySub}>{sub}</Text>
-        {action && (
-          <Pressable onPress={action.onPress} style={styles.emptyBtn}>
-            <Text style={styles.emptyBtnText}>{action.label}</Text>
-          </Pressable>
-        )}
+    <Reveal>
+      <View style={styles.emptyShadow}>
+        <View style={styles.emptyCard}>
+          <View style={styles.emptyArtWrap}>
+            <View style={styles.nightScene}>
+              <View style={styles.nightGlow} />
+              <View style={styles.nightMoon} />
+              <View style={styles.star} />
+              <View style={[styles.star, styles.starTwo]} />
+              <View style={[styles.star, styles.starThree]} />
+              <View style={styles.nightHill} />
+              <View style={styles.nightHillTwo} />
+            </View>
+          </View>
+          <Text style={styles.emptyTitle}>{title}</Text>
+          <Text style={styles.emptySub}>{sub}</Text>
+          {action && (
+            <Tap onPress={action.onPress} style={styles.emptyBtn}>
+              <Text style={styles.emptyBtnText}>{action.label}</Text>
+            </Tap>
+          )}
+        </View>
       </View>
-    </View>
+    </Reveal>
   );
 }
 
@@ -201,12 +287,15 @@ function EmptyState({
 export default function Members() {
   const insets = useSafeAreaInsets();
   const { profile, user } = useAuth();
+  const { style: introStyle } = useScreenIntro();
 
   const [members, setMembers] = useState<Member[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [search, setSearch] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
   const [searchFocused, setSearchFocused] = useState(false);
+  const searchRef = useRef<TextInput>(null);
 
   const [selected, setSelected] = useState<Member | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -239,6 +328,7 @@ export default function Members() {
             email: u.email || '',
             unit: u.unit || '',
             role: (u.role as MemberRole) || 'resident',
+            photoURL: u.photoURL || null,
           };
         });
         list.sort(
@@ -254,15 +344,13 @@ export default function Members() {
     );
   }, [profile?.estateId]);
 
-  const { counts, byRole } = useMemo(() => {
+  const counts = useMemo(() => {
     const c: Record<Filter, number> = { all: 0, resident: 0, security: 0, facility: 0 };
-    const by: Record<MemberRole, number> = { admin: 0, resident: 0, security: 0, facility: 0 };
     (members ?? []).forEach((m) => {
       c.all += 1;
-      by[m.role] += 1;
       if (m.role !== 'admin') c[m.role] += 1;
     });
-    return { counts: c, byRole: by };
+    return c;
   }, [members]);
 
   const visible = useMemo(() => {
@@ -285,6 +373,26 @@ export default function Members() {
       items: visible.filter((m) => m.role === r),
     })).filter((g) => g.items.length > 0);
   }, [visible, filter]);
+
+  const openSearch = () => {
+    setShowSearch(true);
+    setTimeout(() => searchRef.current?.focus(), 80);
+  };
+
+  const toggleSearch = () => {
+    if (showSearch) {
+      setShowSearch(false);
+      setSearch('');
+    } else {
+      openSearch();
+    }
+  };
+
+  const resetAll = () => {
+    setSearch('');
+    setFilter('all');
+    setShowSearch(false);
+  };
 
   const openMember = (m: Member) => {
     setSelected(m);
@@ -335,15 +443,15 @@ export default function Members() {
   };
 
   const total = members?.length ?? 0;
-  const barRoles: MemberRole[] = ['resident', 'security', 'facility', 'admin'];
+  const filtersActive = filter !== 'all' || !!search;
 
   return (
-    <LinearGradient colors={['#DCD0FF', '#EFE9FF', '#FAF8FF']} style={{ flex: 1 }}>
+    <Animated.View style={[{ flex: 1, backgroundColor: '#FAF8FF' }, introStyle]}>
       <AppModal
         visible={!!removing}
         icon="person-remove"
         title="Remove member"
-        message={`Remove ${removing?.name ?? 'this person'} from your estate? They will lose access and would need to request to join again.`}
+        message={`Remove ${removing?.name ?? 'this person'} from your estate? `}
         cancelText="Cancel"
         confirmText="Remove"
         confirmDanger
@@ -355,11 +463,13 @@ export default function Members() {
         {selected && (
           <>
             <View style={styles.sheetAvatar}>
-              <Avatar member={selected} size={68} />
+              <View style={styles.sheetGlow}>
+                <Avatar member={selected} size={72} />
+              </View>
             </View>
             <SheetTitle
               title={selected.name}
-              subtitle={selected.unit ? `Unit ${selected.unit}` : selected.email}
+              subtitle={[selected.email, selected.unit ? `Unit ${selected.unit}` : null].filter(Boolean).join(' · ')}
             />
 
             <Text style={styles.sheetLabel}>Choose a role</Text>
@@ -416,7 +526,7 @@ export default function Members() {
             : ''
         }
         cancelText="Go back"
-        confirmText="Yes, change role"
+        confirmText="Yes"
         onClose={() => {
           cancelSaveRole();
         }}
@@ -426,166 +536,176 @@ export default function Members() {
       />
 
       <ScrollView
-        contentContainerStyle={{
-          paddingTop: insets.top + 12,
-          paddingBottom: insets.bottom + 120,
-          paddingHorizontal: 18,
-        }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 120 }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* Title */}
-        <Text style={styles.title}>Members</Text>
-        <Text style={styles.subtitle}>Manage roles and access for your estate</Text>
+        {/* Header block */}
+        <LinearGradient
+          colors={['#2A1B7A', '#4B2FD6', '#7A5CFF']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[styles.header, { paddingTop: insets.top + 18 }]}
+        >
+          <View pointerEvents="none" style={styles.headerCircleA} />
+          <View pointerEvents="none" style={styles.headerCircleB} />
 
-        {/* Summary hero */}
-        <View style={styles.heroShadow}>
-          <View style={styles.heroClip}>
-            <LinearGradient
-              colors={['#FFFFFF', '#F3EEFF']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.heroFill}
-            />
-            <View style={styles.heroTop}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.heroLabel}>Total members</Text>
-                <Text style={styles.heroNumber}>{members === null ? '–' : total}</Text>
+          <Text style={styles.headerTitle}>Members</Text>
+          <Text style={styles.headerSub}>Manage roles and access for your estate</Text>
+
+          <View style={styles.heroTop}>
+            <View style={{ flex: 1 }}>
+              <View style={styles.statRow}>
+                <Text style={styles.statLabel}>Total members</Text>
               </View>
+              <Text style={styles.statNumber}>{members === null ? '–' : total}</Text>
+              <Text style={styles.statCaption}>in your estate</Text>
+            </View>
+            <View style={styles.heroIconRing}>
               <LinearGradient
-                colors={['#A78BFA', '#5B3CF0']}
+                colors={['rgba(255,255,255,0.32)', 'rgba(255,255,255,0.12)']}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
                 style={styles.heroIcon}
               >
-                <Ionicons name="people" size={28} color="#FFFFFF" />
+                <Ionicons name="people" size={40} color="#FFFFFF" />
               </LinearGradient>
             </View>
+          </View>
 
-            <View style={styles.bar}>
-              {total === 0 ? (
-                <View style={[styles.barSeg, { flex: 1, backgroundColor: '#E8E3F5' }]} />
-              ) : (
-                barRoles
-                  .filter((r) => byRole[r] > 0)
-                  .map((r) => (
-                    <View
-                      key={r}
-                      style={[styles.barSeg, { flex: byRole[r], backgroundColor: ROLE_STYLE[r].tint }]}
-                    />
-                  ))
-              )}
-            </View>
+          <View style={styles.headerBtns}>
+            <Tap onPress={openSearch} wrapStyle={{ flex: 1 }} style={styles.headerBtn}>
+              <Ionicons name="search-outline" size={20} color="#FFFFFF" />
+              <Text style={styles.headerBtnText}>Find member</Text>
+            </Tap>
+            {/* <Tap onPress={resetAll} wrapStyle={{ flex: 1 }} style={styles.headerBtn}>
+              <Ionicons name="refresh-outline" size={20} color="#FFFFFF" />
+              <Text style={styles.headerBtnText}>Reset view</Text>
+            </Tap> */}
+          </View>
+        </LinearGradient>
 
-            <View style={styles.legend}>
-              {barRoles.map((r) => (
-                <View key={r} style={styles.legendItem}>
-                  <View style={[styles.legendDot, { backgroundColor: ROLE_STYLE[r].tint }]} />
-                  <Text style={styles.legendText}>
-                    {ROLE_STYLE[r].plural}{' '}
-                    <Text style={styles.legendCount}>{byRole[r]}</Text>
+        <View style={styles.body}>
+          {/* Quick filters */}
+          <Text style={styles.sectionTitle}>Quick Filters</Text>
+          <View style={styles.tiles}>
+            {FILTERS.map((f) => {
+              const active = filter === f.key;
+              return (
+                <Tap
+                  key={f.key}
+                  onPress={() => setFilter(f.key)}
+                  wrapStyle={{ flex: 1 }}
+                  style={[styles.tile, active && styles.tileActive]}
+                >
+                  <View style={[styles.tileCount, active && styles.tileCountActive]}>
+                    <Text style={[styles.tileCountText, active && { color: '#FFFFFF' }]}>
+                      {counts[f.key]}
+                    </Text>
+                  </View>
+                  <Ionicons name={f.icon} size={24} color={active ? '#FFFFFF' : colors.primary} />
+                  <Text style={[styles.tileLabel, active && { color: '#FFFFFF' }]} numberOfLines={1}>
+                    {f.label}
                   </Text>
-                </View>
-              ))}
-            </View>
+                </Tap>
+              );
+            })}
           </View>
-        </View>
 
-        {/* Search */}
-        <View style={[styles.search, searchFocused && styles.searchFocused]}>
-          <View style={styles.searchIcon}>
-            <Ionicons name="search" size={16} color={colors.primary} />
+          {/* List header */}
+          <View style={styles.listHeader}>
+            <Text style={styles.sectionTitleInline}>All Members</Text>
+            <Tap
+              onPress={toggleSearch}
+              hitSlop={8}
+              style={[styles.filterBtn, (showSearch || filtersActive) && styles.filterBtnActive]}
+            >
+              <Ionicons
+                name={showSearch ? 'close' : 'search'}
+                size={18}
+                color={showSearch || filtersActive ? '#FFFFFF' : '#1B1245'}
+              />
+            </Tap>
           </View>
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            onFocus={() => setSearchFocused(true)}
-            onBlur={() => setSearchFocused(false)}
-            placeholder="Search by name, unit or email"
-            placeholderTextColor={colors.textMuted}
-            autoCorrect={false}
-            style={styles.searchInput}
-          />
-          {!!search && (
-            <Pressable onPress={() => setSearch('')} hitSlop={8}>
-              <Ionicons name="close-circle" size={20} color={colors.textMuted} />
-            </Pressable>
+
+          {/* Search */}
+          {showSearch && (
+            <Reveal>
+              <View style={[styles.search, searchFocused && styles.searchFocused]}>
+                <View style={styles.searchIcon}>
+                  <Ionicons name="search" size={16} color={colors.primary} />
+                </View>
+                <TextInput
+                  ref={searchRef}
+                  value={search}
+                  onChangeText={setSearch}
+                  onFocus={() => setSearchFocused(true)}
+                  onBlur={() => setSearchFocused(false)}
+                  placeholder="Search by name, unit or email"
+                  placeholderTextColor={colors.textMuted}
+                  autoCorrect={false}
+                  style={styles.searchInput}
+                />
+                {!!search && (
+                  <Pressable onPress={() => setSearch('')} hitSlop={8}>
+                    <Ionicons name="close-circle" size={20} color={colors.textMuted} />
+                  </Pressable>
+                )}
+              </View>
+            </Reveal>
+          )}
+
+          {/* List */}
+          {members === null ? (
+            <View style={styles.listCard}>
+              <SkeletonRow />
+              <SkeletonRow />
+              <SkeletonRow last />
+            </View>
+          ) : loadError ? (
+            <EmptyState
+              icon="cloud-offline-outline"
+              title="Could not load members"
+              sub="Check your connection and try again."
+            />
+          ) : visible.length === 0 ? (
+            <EmptyState
+              icon={search ? 'search-outline' : 'people-outline'}
+              title="No members found"
+              sub={search ? 'Try a different name, unit or email.' : 'People you approve will show up here.'}
+              action={search ? { label: 'Clear search', onPress: () => setSearch('') } : undefined}
+            />
+          ) : (
+            groups.map((g, gi) => (
+              <Reveal key={g.role ?? 'flat'} index={gi}>
+                {g.role && (
+                  <View style={styles.groupHeader}>
+                    <View style={[styles.groupIcon, { backgroundColor: ROLE_STYLE[g.role].bg }]}>
+                      <Ionicons name={ROLE_ICON[g.role]} size={13} color={ROLE_STYLE[g.role].tint} />
+                    </View>
+                    <Text style={styles.groupTitle}>{ROLE_STYLE[g.role].plural}</Text>
+                    <View style={styles.groupLine} />
+                    <Text style={styles.groupCount}>{g.items.length}</Text>
+                  </View>
+                )}
+                <View style={styles.listCard}>
+                  {g.items.map((m, i) => (
+                    <MemberRow
+                      key={m.id}
+                      member={m}
+                      last={i === g.items.length - 1}
+                      isYou={m.id === user?.uid}
+                      editable={m.role !== 'admin' && m.id !== user?.uid}
+                      onPress={() => openMember(m)}
+                    />
+                  ))}
+                </View>
+              </Reveal>
+            ))
           )}
         </View>
-
-        {/* Filters */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.chipsScroll}
-          contentContainerStyle={styles.chips}
-        >
-          {FILTERS.map((f) => {
-            const active = filter === f.key;
-            return (
-              <Pressable
-                key={f.key}
-                onPress={() => setFilter(f.key)}
-                style={[styles.chip, active && styles.chipActive]}
-              >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{f.label}</Text>
-                <View style={[styles.chipCount, active && styles.chipCountActive]}>
-                  <Text style={[styles.chipCountText, active && styles.chipCountTextActive]}>
-                    {counts[f.key]}
-                  </Text>
-                </View>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-
-        {/* List */}
-        {members === null ? (
-          <>
-            <Skeleton />
-            <Skeleton />
-            <Skeleton />
-          </>
-        ) : loadError ? (
-          <EmptyState
-            icon="cloud-offline-outline"
-            title="Could not load members"
-            sub="Check your connection and try again."
-          />
-        ) : visible.length === 0 ? (
-          <EmptyState
-            icon={search ? 'search-outline' : 'people-outline'}
-            title="No members found"
-            sub={search ? 'Try a different name, unit or email.' : 'People you approve will show up here.'}
-            action={search ? { label: 'Clear search', onPress: () => setSearch('') } : undefined}
-          />
-        ) : (
-          groups.map((g) => (
-            <View key={g.role ?? 'flat'}>
-              {g.role && (
-                <View style={styles.groupHeader}>
-                  <View style={[styles.groupIcon, { backgroundColor: ROLE_STYLE[g.role].bg }]}>
-                    <Ionicons name={ROLE_ICON[g.role]} size={13} color={ROLE_STYLE[g.role].tint} />
-                  </View>
-                  <Text style={styles.groupTitle}>{ROLE_STYLE[g.role].plural}</Text>
-                  <Text style={styles.groupCount}>{g.items.length}</Text>
-                  <View style={styles.groupLine} />
-                </View>
-              )}
-              {g.items.map((m) => (
-                <MemberCard
-                  key={m.id}
-                  member={m}
-                  isYou={m.id === user?.uid}
-                  editable={m.role !== 'admin' && m.id !== user?.uid}
-                  onPress={() => openMember(m)}
-                />
-              ))}
-            </View>
-          ))
-        )}
       </ScrollView>
-    </LinearGradient>
+    </Animated.View>
   );
 }
 
@@ -600,80 +720,183 @@ const SHADOW = {
 } as const;
 
 const styles = StyleSheet.create({
-  title: {
-    ...typography.h1,
-    fontFamily: 'PlusJakartaSans_800ExtraBold',
-    fontSize: 30,
-    lineHeight: 36,
-    letterSpacing: -0.6,
-    color: '#0F0A2E',
-    marginTop: 10
-  },
-  subtitle: {
-    ...typography.body,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: colors.textMuted,
-    marginTop: 2,
-    marginBottom: 18,
-  },
-
-  /* Hero */
-  heroShadow: {
-    marginBottom: 18,
-    borderRadius: 28,
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#5B3CF0',
-    shadowOpacity: 0.18,
-    shadowRadius: 22,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 8,
-  },
-  heroClip: {
-    borderRadius: 28,
+  /* Header */
+  header: {
+    paddingHorizontal: 20,
+    paddingBottom: 22,
+    borderBottomLeftRadius: 34,
+    borderBottomRightRadius: 34,
     overflow: 'hidden',
-    padding: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(108,71,255,0.10)',
+    shadowColor: '#5B3CF0',
+    shadowOpacity: 0.22,
+    shadowRadius: 28,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 10,
   },
-  heroFill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-  heroTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
-  heroLabel: {
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+  headerCircleA: {
+    position: 'absolute',
+    top: -60,
+    right: -40,
+    width: 190,
+    height: 190,
+    borderRadius: 95,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+  },
+  headerCircleB: {
+    position: 'absolute',
+    bottom: -70,
+    left: -50,
+    width: 170,
+    height: 170,
+    borderRadius: 85,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+  },
+headerTitle: {
+  ...typography.h1,
+  fontFamily: 'PlusJakartaSans_800ExtraBold',
+  fontSize: 32,
+  lineHeight: 34,
+  letterSpacing: -0.5,
+  color: '#FFFFFF',
+  textAlign: 'center',
+  // faux extra thickness
+  textShadowColor: '#FFFFFF',
+  textShadowOffset: { width: 0, height: 0 },
+  textShadowRadius: 1.5,
+  marginTop: 10,
+},
+  headerSub: {
+    fontFamily: 'PlusJakartaSans_500Medium',
+    fontSize: 11,
+    width: '60%',
+    color: 'rgba(255,255,255,0.75)',
+    marginTop: 2,
+    marginBottom: 22,
+    textAlign: 'center',
+    alignSelf: 'center',
+  },
+  statRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  statLabel: {
+    fontFamily: 'PlusJakartaSans_700Bold',
     fontSize: 13,
-    color: colors.textMuted,
+    color: 'rgba(255,255,255,0.8)',
+    letterSpacing: 0.3,
   },
-  heroNumber: {
+  statNumber: {
     fontFamily: 'PlusJakartaSans_800ExtraBold',
-    fontSize: 44,
-    lineHeight: 50,
-    letterSpacing: -1,
-    color: '#0F0A2E',
+    fontSize: 48,
+    lineHeight: 56,
+    letterSpacing: -1.2,
+    color: '#FFFFFF',
   },
-  heroIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: 20,
+  statCaption: {
+    fontFamily: 'PlusJakartaSans_500Medium',
+    fontSize: 12.5,
+    color: 'rgba(255,255,255,0.7)',
+    marginTop: -2,
+  },
+  heroTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+  heroIconRing: {
+    width: 96,
+    height: 96,
+    borderRadius: 32,
+    backgroundColor: 'rgba(255,255,255,0.10)',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#5B3CF0',
-    shadowOpacity: 0.35,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 6,
   },
-  bar: { flexDirection: 'row', height: 10, gap: 3, marginBottom: 14 },
-  barSeg: { height: 10, borderRadius: 5 },
-  legend: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 16, rowGap: 6 },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendText: {
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    fontSize: 12,
-    color: colors.textMuted,
+  heroIcon: {
+    width: 80,
+    height: 80,
+    borderRadius: 27,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
   },
-  legendCount: { fontFamily: 'PlusJakartaSans_800ExtraBold', color: colors.text },
+  headerBtns: { flexDirection: 'row', gap: 12, marginBottom: 4 },
+  headerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    height: 54,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  headerBtnText: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 14, color: '#FFFFFF' },
 
-  /* Search + chips */
+  /* Body */
+  body: { paddingHorizontal: 18, paddingTop: 20 },
+
+  sectionTitle: {
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    fontSize: 16,
+    color: '#1B1245',
+    marginBottom: 12,
+  },
+  sectionTitleInline: {
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    fontSize: 16,
+    color: '#1B1245',
+  },
+
+  /* Quick filter tiles */
+  tiles: { flexDirection: 'row', gap: 10, marginBottom: 24 },
+  tile: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    height: 92,
+    borderRadius: 20,
+    backgroundColor: '#F1EBFF',
+    borderWidth: 1.5,
+    borderColor: 'rgba(108,71,255,0.10)',
+  },
+  tileActive: {
+    backgroundColor: '#1B1245',
+    borderColor: '#1B1245',
+    shadowColor: '#1B1245',
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 5,
+  },
+  tileLabel: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 12, color: '#1B1245' },
+  tileCount: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 5,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tileCountActive: { backgroundColor: 'rgba(255,255,255,0.2)' },
+  tileCountText: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 10.5, color: colors.primary },
+
+  /* List header + search */
+  listHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  filterBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: 'rgba(108,71,255,0.10)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   search: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -681,18 +904,22 @@ const styles = StyleSheet.create({
     height: 54,
     paddingLeft: 10,
     paddingRight: 16,
-    borderRadius: 18,
+    borderRadius: 20,
     backgroundColor: '#FFFFFF',
     borderWidth: 1.5,
     borderColor: 'rgba(108,71,255,0.08)',
     marginBottom: 14,
     ...SHADOW,
   },
-  searchFocused: { borderColor: colors.primary },
+  searchFocused: {
+    borderColor: colors.primary,
+    shadowOpacity: 0.28,
+    shadowRadius: 18,
+  },
   searchIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: '#F1EBFF',
     alignItems: 'center',
     justifyContent: 'center',
@@ -706,46 +933,8 @@ const styles = StyleSheet.create({
     padding: 0,
   },
 
-  chipsScroll: { marginHorizontal: -20, marginBottom: 18 },
-  chips: { paddingHorizontal: 20, gap: 8 },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    height: 42,
-    paddingLeft: 16,
-    paddingRight: 8,
-    borderRadius: radius.full,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.5,
-    borderColor: 'rgba(108,71,255,0.08)',
-  },
-  chipActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-    shadowColor: '#5B3CF0',
-    shadowOpacity: 0.35,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 6,
-  },
-  chipText: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13, color: colors.text },
-  chipTextActive: { color: '#FFFFFF' },
-  chipCount: {
-    minWidth: 26,
-    height: 26,
-    borderRadius: 13,
-    paddingHorizontal: 7,
-    backgroundColor: '#F1EBFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  chipCountActive: { backgroundColor: 'rgba(255,255,255,0.22)' },
-  chipCountText: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 12, color: colors.primary },
-  chipCountTextActive: { color: '#FFFFFF' },
-
   /* Groups */
-  groupHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, marginTop: 4 },
+  groupHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8, marginTop: 4 },
   groupIcon: {
     width: 24,
     height: 24,
@@ -753,39 +942,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  groupTitle: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 14, color: colors.text },
-  groupCount: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13, color: colors.textMuted },
-  groupLine: { flex: 1, height: 1, backgroundColor: 'rgba(108,71,255,0.12)', marginLeft: 4 },
+  groupTitle: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 13, color: '#1B1245' },
+  groupLine: { flex: 1, height: 1, backgroundColor: 'rgba(108,71,255,0.14)' },
+  groupCount: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 12, color: colors.primary },
 
-  /* Member card */
-  card: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    padding: 12,
-    marginBottom: 10,
-    borderRadius: 22,
+  /* List card + rows */
+  listCard: {
+    borderRadius: 24,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: 'rgba(108,71,255,0.06)',
+    paddingHorizontal: 14,
+    marginBottom: 16,
+    overflow: 'hidden',
     ...SHADOW,
   },
-  avatarText: { fontFamily: 'PlusJakartaSans_800ExtraBold', color: '#FFFFFF' },
-  avatarBadge: {
-    position: 'absolute',
-    right: -3,
-    bottom: -3,
-    backgroundColor: '#FFFFFF',
+  row: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 3,
+    gap: 12,
+    paddingVertical: 14,
   },
+  rowDivider: {
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(108,71,255,0.08)',
+  },
+  rowRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  avatarText: { fontFamily: 'PlusJakartaSans_800ExtraBold', color: '#FFFFFF' },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   name: {
     fontFamily: 'PlusJakartaSans_700Bold',
@@ -800,48 +983,132 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   youText: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 10, color: colors.primary },
-  subRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
   sub: {
     fontFamily: 'PlusJakartaSans_500Medium',
     fontSize: 12.5,
     color: colors.textMuted,
-    flexShrink: 1,
+    marginTop: 3,
   },
-  rolePill: { paddingVertical: 5, paddingHorizontal: 10, borderRadius: radius.full },
+  unitRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+  unitText: {
+    fontFamily: 'PlusJakartaSans_700Bold',
+    fontSize: 12,
+    color: colors.primary,
+  },
+  rolePill: {
+    paddingVertical: 5,
+    paddingHorizontal: 11,
+    borderRadius: radius.full,
+  },
   rolePillText: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 11.5 },
-  chevron: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#F4F0FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
 
   /* Skeleton */
   skel: { backgroundColor: '#EEE9F9', borderRadius: 7 },
 
   /* Empty */
   emptyShadow: {
-    borderRadius: 26,
-    backgroundColor: '#FFFFFF',
-    ...SHADOW,
+    borderRadius: 28,
   },
   emptyCard: {
     alignItems: 'center',
     paddingVertical: 38,
     paddingHorizontal: 28,
-    borderRadius: 26,
-    borderWidth: 1,
-    borderColor: 'rgba(108,71,255,0.08)',
+    borderRadius: 28,
   },
-  emptyIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 22,
+  emptyRingOuter: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: '#F6F2FF',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 14,
+    marginBottom: 16,
+  },
+  emptyRingInner: {
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    backgroundColor: '#EAE3FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#5B3CF0',
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 5,
+  },
+  emptyArtWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+    marginTop: 20,
+  },
+  nightScene: {
+    width: 180,
+    height: 110,
+    borderRadius: 24,
+    backgroundColor: 'rgba(116, 106, 185, 0.08)',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  nightGlow: {
+    position: 'absolute',
+    width: 180,
+    height: 110,
+    backgroundColor: 'rgba(124, 110, 204, 0.12)',
+  },
+  nightMoon: {
+    position: 'absolute',
+    top: 16,
+    right: 28,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#F7E7A5',
+    shadowColor: '#F7E7A5',
+    shadowOpacity: 0.8,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  star: {
+    position: 'absolute',
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#FFFFFF',
+    top: 24,
+    left: 36,
+    opacity: 0.8,
+  },
+  starTwo: { top: 38, left: 64, opacity: 0.7 },
+  starThree: { top: 26, left: 108, opacity: 0.9 },
+  nightHill: {
+    position: 'absolute',
+    bottom: -10,
+    left: -10,
+    width: 150,
+    height: 54,
+    borderRadius: 80,
+    backgroundColor: '#3C3A5B',
+    opacity: 0.8,
+  },
+  nightHillTwo: {
+    position: 'absolute',
+    bottom: -18,
+    right: -14,
+    width: 144,
+    height: 56,
+    borderRadius: 80,
+    backgroundColor: '#2C2944',
+    opacity: 0.9,
   },
   emptyTitle: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 17, color: colors.text },
   emptySub: {
@@ -853,10 +1120,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   emptyBtn: {
-    marginTop: 16,
-    paddingHorizontal: 18,
-    height: 40,
-    borderRadius: 20,
+    marginTop: 18,
+    paddingHorizontal: 20,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: '#F1EBFF',
     alignItems: 'center',
     justifyContent: 'center',
@@ -864,7 +1131,12 @@ const styles = StyleSheet.create({
   emptyBtnText: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13, color: colors.primary },
 
   /* Sheet */
-  sheetAvatar: { alignItems: 'center', marginBottom: 10 },
+  sheetAvatar: { alignItems: 'center', marginBottom: 12 },
+  sheetGlow: {
+    padding: 6,
+    borderRadius: 42,
+    backgroundColor: 'rgba(108,71,255,0.10)',
+  },
   sheetLabel: {
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     fontSize: 13,

@@ -1,25 +1,13 @@
-import { ActivityIndicator, View } from 'react-native';
 import { Redirect } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
-import { colors } from '@/theme';
+import SimpleLoader from '@/components/ui/SimpleLoader';
 import { HOME_ROUTE } from '@/lib/roles';
 
 export default function Index() {
   const { user, profile, loading } = useAuth();
 
   if (loading) {
-    return (
-      <View
-        style={{
-          flex: 1,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: colors.background,
-        }}
-      >
-        <ActivityIndicator color={colors.primary} />
-      </View>
-    );
+    return <SimpleLoader label="Loading..." />;
   }
 
   if (!user) return <Redirect href={'/welcome' as any} />;

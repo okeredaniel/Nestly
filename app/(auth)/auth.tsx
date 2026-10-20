@@ -26,6 +26,7 @@ import { auth, db } from '@/lib/firebase';
 import { colors, spacing, typography } from '@/theme';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const RESET_COOLDOWN_SECONDS = 60;
 
 const friendlyError = (code?: string) => {
   switch (code) {
@@ -38,6 +39,7 @@ const friendlyError = (code?: string) => {
     case 'auth/weak-password':
       return 'Use a stronger password';
     case 'auth/invalid-email':
+    case 'auth/missing-email':
       return 'Enter a valid email address';
     case 'auth/too-many-requests':
       return 'Too many attempts. Try again later';
@@ -66,21 +68,28 @@ export default function AuthCard() {
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
 
+  // forgot password
+  const [resetting, setResetting] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+
   const anim = useMemo(() => new Animated.Value(0), []);
 
   useEffect(() => {
     Animated.timing(anim, { toValue: 1, duration: 260, useNativeDriver: true }).start();
   }, [anim]);
 
+  // Counts the resend cooldown down once per second.
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
+
   const isLogin = mode === 'login';
 
   const close = () => {
     if (router.canGoBack()) router.back();
     else router.replace('/welcome' as any);
-  };
-
-  const showSoon = (feature: string) => {
-    setNotice({ title: 'Coming soon', message: `${feature} is coming soon.` });
   };
 
   const switchMode = (next: Mode) => {
@@ -133,15 +142,29 @@ export default function AuthCard() {
   };
 
   const handleForgot = async () => {
-    if (!EMAIL_REGEX.test(email.trim())) {
+    if (resetting || cooldown > 0) return;
+
+    const addr = email.trim();
+    if (!EMAIL_REGEX.test(addr)) {
+      // The email field only shows on step 1, so send the user back to it.
+      setStep(1);
       setErrors({ email: 'Enter your email first' });
       return;
     }
+
+    setResetting(true);
     try {
-      await sendPasswordResetEmail(auth, email.trim());
-      showSoon('Reset link sent. Check your email');
+      await sendPasswordResetEmail(auth, addr);
+      setCooldown(RESET_COOLDOWN_SECONDS);
+      // Firebase can hide whether an account exists, so the wording stays neutral.
+      setNotice({
+        title: 'Check your email',
+        message: `If an account exists for ${addr}, we sent a link to reset your password. Open it, choose a new password, then come back and log in. Not there? Check your spam folder.`,
+      });
     } catch (err: any) {
-      showSoon(friendlyError(err?.code));
+      setNotice({ title: 'Could not send link', message: friendlyError(err?.code) });
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -185,6 +208,12 @@ export default function AuthCard() {
       : 'Almost there';
   const buttonTitle = isLogin ? (step === 1 ? 'Continue' : 'Log in') : step === 1 ? 'Continue' : 'Create account';
 
+  const forgotLabel = resetting
+    ? 'Sending link…'
+    : cooldown > 0
+      ? `Link sent. Resend in ${cooldown}s`
+      : 'Forgot password?';
+
   const cardAnim = {
     opacity: anim,
     transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [160, 0] }) }],
@@ -202,103 +231,113 @@ export default function AuthCard() {
         confirmText="OK"
       />
 
-      <KeyboardAvoidingView
-        behavior="padding"
-        style={[styles.center, { paddingBottom: insets.bottom + 12 }]}
-      >
-        <Animated.View style={cardAnim}>
-          <Pressable style={[styles.card, { maxHeight: height * 0.88 }]} onPress={() => {}}>
-            <Pressable onPress={close} hitSlop={10} style={styles.handleWrap}>
-              <View style={styles.handle} />
-            </Pressable>
-
-            <ScrollView
-              contentContainerStyle={styles.content}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-              bounces={false}
-            >
-              <Text style={styles.title}>{title}</Text>
-
-              {!isLogin && step === 2 && (
-                <Pressable onPress={() => setStep(1)} style={styles.emailRow} hitSlop={8}>
-                  <Ionicons name="mail-outline" size={16} color={colors.textMuted} />
-                  <Text style={styles.emailRowText} numberOfLines={1}>{email.trim()}</Text>
-                  <Text style={styles.emailRowChange}>Change</Text>
-                </Pressable>
-              )}
-
-              {(isLogin ? step === 1 : step === 1) && (
-                <AppTextField
-                  label="Email"
-                  value={email}
-                  onChangeText={setEmail}
-                  placeholder="you@example.com"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  error={errors.email}
-                />
-              )}
-
-              {!isLogin && step === 2 && (
-                <AppTextField
-                  label="Full name"
-                  value={name}
-                  onChangeText={setName}
-                  placeholder="Your full name"
-                  autoCapitalize="words"
-                  error={errors.name}
-                />
-              )}
-
-              {((isLogin && step === 2) || (!isLogin && step === 2)) && (
-                <AppTextField
-                  label="Password"
-                  value={password}
-                  onChangeText={setPassword}
-                  placeholder={isLogin ? 'Your password' : 'At least 8 characters'}
-                  secureTextEntry
-                  autoCapitalize="none"
-                  error={errors.password}
-                />
-              )}
-
-              {!isLogin && step === 2 && (
-                <AppTextField
-                  label="Confirm password"
-                  value={confirm}
-                  onChangeText={setConfirm}
-                  placeholder="Repeat your password"
-                  secureTextEntry
-                  autoCapitalize="none"
-                  error={errors.confirm}
-                />
-              )}
-
-              {isLogin && step === 2 && (
-                <Pressable onPress={handleForgot} style={styles.forgot} hitSlop={8}>
-                  <Text style={styles.forgotText}>Forgot password?</Text>
-                </Pressable>
-              )}
-
-              <PrimaryButton title={buttonTitle} onPress={handleSubmit} loading={loading} />
-
-              <Pressable
-                onPress={() => switchMode(isLogin ? 'signup' : 'login')}
-                style={styles.switch}
-                hitSlop={8}
-              >
-                <Text style={styles.switchText}>
-                  {isLogin ? 'New to Nestly? ' : 'Already have an account? '}
-                  <Text style={styles.switchBold}>{isLogin ? 'Create an account' : 'Log in'}</Text>
-                </Text>
+        <KeyboardAvoidingView
+          behavior="padding"
+          style={[styles.center, { paddingBottom: insets.bottom + 12 }]}
+        >
+          <Animated.View style={cardAnim}>
+            <Pressable style={[styles.card, { maxHeight: height * 0.88 }]} onPress={() => {}}>
+              <Pressable onPress={close} hitSlop={10} style={styles.handleWrap}>
+                <View style={styles.handle} />
               </Pressable>
-            </ScrollView>
-          </Pressable>
-        </Animated.View>
-      </KeyboardAvoidingView>
-    </Pressable>
+
+              <ScrollView
+                contentContainerStyle={styles.content}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                bounces={false}
+              >
+                <Text style={styles.title}>{title}</Text>
+
+                {/* on step 2 (log in and sign up) show which email is being used, with a way to change it */}
+                {step === 2 && (
+                  <Pressable onPress={() => setStep(1)} style={styles.emailRow} hitSlop={8}>
+                    <Ionicons name="mail-outline" size={16} color={colors.textMuted} />
+                    <Text style={styles.emailRowText} numberOfLines={1}>{email.trim()}</Text>
+                    <Text style={styles.emailRowChange}>Change</Text>
+                  </Pressable>
+                )}
+
+                {step === 1 && (
+                  <AppTextField
+                    label="Email"
+                    value={email}
+                    onChangeText={setEmail}
+                    placeholder="you@example.com"
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    error={errors.email}
+                  />
+                )}
+
+                {!isLogin && step === 2 && (
+                  <AppTextField
+                    label="Full name"
+                    value={name}
+                    onChangeText={setName}
+                    placeholder="Your full name"
+                    autoCapitalize="words"
+                    error={errors.name}
+                  />
+                )}
+
+                {step === 2 && (
+                  <AppTextField
+                    label="Password"
+                    value={password}
+                    onChangeText={setPassword}
+                    placeholder={isLogin ? 'Your password' : 'At least 8 characters'}
+                    secureTextEntry
+                    autoCapitalize="none"
+                    error={errors.password}
+                  />
+                )}
+
+                {!isLogin && step === 2 && (
+                  <AppTextField
+                    label="Confirm password"
+                    value={confirm}
+                    onChangeText={setConfirm}
+                    placeholder="Repeat your password"
+                    secureTextEntry
+                    autoCapitalize="none"
+                    error={errors.confirm}
+                  />
+                )}
+
+                {isLogin && step === 2 && (
+                  <Pressable
+                    onPress={handleForgot}
+                    disabled={resetting || cooldown > 0}
+                    style={styles.forgot}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Send a password reset link to my email"
+                  >
+                    <Text style={[styles.forgotText, (resetting || cooldown > 0) && { opacity: 0.55 }]}>
+                      {forgotLabel}
+                    </Text>
+                  </Pressable>
+                )}
+
+                <PrimaryButton title={buttonTitle} onPress={handleSubmit} loading={loading} />
+
+                <Pressable
+                  onPress={() => switchMode(isLogin ? 'signup' : 'login')}
+                  style={styles.switch}
+                  hitSlop={8}
+                >
+                  <Text style={styles.switchText}>
+                    {isLogin ? 'New to Nestly? ' : 'Already have an account? '}
+                    <Text style={styles.switchBold}>{isLogin ? 'Create an account' : 'Log in'}</Text>
+                  </Text>
+                </Pressable>
+              </ScrollView>
+            </Pressable>
+          </Animated.View>
+        </KeyboardAvoidingView>
+      </Pressable>
   );
 }
 
@@ -326,18 +365,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#D8D6DE',
   },
   content: { padding: 24, paddingTop: 8, paddingBottom: 32 },
-  title: { ...typography.h1,
-  fontFamily: "PlusJakartaSans_800ExtraBold",
-  fontSize: 25,
-  lineHeight: 44,
-  letterSpacing: 0,
-  color: "#0F0A2E",
-  textAlign: "center",
-  textShadowColor: "#0F0A2E",
-  textShadowOffset: { width: 0.5, height: 0 },
-  textShadowRadius: 0.8,
-  marginBottom: 11
-},
+  title: {
+    ...typography.h1,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    fontSize: 25,
+    lineHeight: 44,
+    letterSpacing: 0,
+    color: '#0F0A2E',
+    textAlign: 'center',
+    textShadowColor: '#0F0A2E',
+    textShadowOffset: { width: 0.5, height: 0 },
+    textShadowRadius: 0.8,
+    marginBottom: 11,
+  },
 
   divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 12 },
   line: { flex: 1, height: 1, backgroundColor: colors.border },

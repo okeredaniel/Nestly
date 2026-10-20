@@ -44,8 +44,12 @@ export default function JoinEstateCard({ visible, onClose }: Props) {
       await requestToJoin(code, unit.trim());
       setSent(true);
     } catch (err: any) {
-      if (err?.message === 'estate-not-found') setErrors({ code: friendlyEstateError(err) });
-      else setErrors({ form: friendlyEstateError(err) });
+      // A wrong or expired code is a problem with the code field, so show it there.
+      if (err?.message === 'estate-not-found' || err?.message === 'code-expired') {
+        setErrors({ code: friendlyEstateError(err) });
+      } else {
+        setErrors({ form: friendlyEstateError(err) });
+      }
     } finally {
       setLoading(false);
     }

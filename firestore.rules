@@ -1,0 +1,506 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function me() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isEstateAdmin(estateId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && me().role == 'admin'
+        && me().get('status', null) == 'approved'
+        && me().estateId == estateId;
+    }
+
+    function inEstate(estateId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && me().estateId == estateId;
+    }
+
+    function isApprovedMember(estateId) {
+      return inEstate(estateId)
+        && me().get('status', null) == 'approved';
+    }
+
+    function roleIs(r) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && me().get('role', null) == r;
+    }
+
+    function validName(n) {
+      return n is string && n.size() >= 2 && n.size() <= 80;
+    }
+
+    match /users/{uid} {
+      allow read: if isSelf(uid)
+        || (resource.data.estateId != null && isEstateAdmin(resource.data.estateId));
+
+      allow create: if isSelf(uid)
+        && request.resource.data.estateId == null
+        && request.resource.data.role == null
+        && request.resource.data.get('status', null) == null
+        && validName(request.resource.data.name)
+        && request.resource.data.email is string
+        && request.resource.data.email.lower() == request.auth.token.email.lower()
+        && request.resource.data.keys().hasOnly(['name', 'email', 'estateId', 'role', 'status', 'unit', 'createdAt']);
+
+      allow update: if isSelf(uid) && (
+        (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
+          && validName(request.resource.data.name)
+        )
+        || (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['photoURL'])
+          && (
+            request.resource.data.get('photoURL', null) == null
+            || (
+              request.resource.data.photoURL is string
+              && request.resource.data.photoURL.size() <= 100000
+            )
+          )
+        )
+        || (
+          resource.data.estateId == null
+          && request.resource.data.role == 'admin'
+          && request.resource.data.status == 'approved'
+          && request.resource.data.estateId is string
+          && getAfter(/databases/$(database)/documents/estates/$(request.resource.data.estateId)).data.adminUid == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estateId', 'role', 'status'])
+        )
+        || (
+          resource.data.estateId == null
+          && request.resource.data.role == 'resident'
+          && request.resource.data.status == 'pending'
+          && request.resource.data.estateId is string
+          && exists(/databases/$(database)/documents/estates/$(request.resource.data.estateId))
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estateId', 'role', 'status', 'unit'])
+        )
+        || (
+          resource.data.get('status', null) in ['pending', 'rejected']
+          && request.resource.data.estateId == null
+          && request.resource.data.role == null
+          && request.resource.data.status == null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['estateId', 'role', 'status', 'unit'])
+        )
+        || (
+          resource.data.get('role', null) == 'admin'
+          && request.resource.data.role == 'resident'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role'])
+          && resource.data.estateId is string
+          && getAfter(/databases/$(database)/documents/estates/$(resource.data.estateId)).data.adminUid != request.auth.uid
+          && getAfter(/databases/$(database)/documents/users/$(getAfter(/databases/$(database)/documents/estates/$(resource.data.estateId)).data.adminUid)).data.role == 'admin'
+        )
+      );
+
+      allow update: if signedIn()
+        && request.auth.uid != uid
+        && resource.data.estateId != null
+        && isEstateAdmin(resource.data.estateId)
+        && request.resource.data.estateId == resource.data.estateId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'status'])
+        && request.resource.data.role in ['resident', 'security', 'facility'];
+
+      allow update: if signedIn()
+        && request.auth.uid != uid
+        && resource.data.estateId != null
+        && isEstateAdmin(resource.data.estateId)
+        && resource.data.get('status', null) == 'approved'
+        && request.resource.data.estateId == resource.data.estateId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role'])
+        && request.resource.data.role == 'admin'
+        && getAfter(/databases/$(database)/documents/estates/$(resource.data.estateId)).data.adminUid == uid;
+
+      allow delete: if isSelf(uid) && resource.data.get('role', null) != 'admin';
+    }
+
+    match /estates/{estateId} {
+      allow get: if inEstate(estateId);
+      allow list: if false;
+
+      allow create: if signedIn()
+        && request.resource.data.adminUid == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 3
+        && request.resource.data.name.size() <= 60
+        && request.resource.data.keys().hasOnly(['name', 'address', 'units', 'code', 'codeExpiresAt', 'adminUid', 'createdAt']);
+
+      allow update: if isEstateAdmin(estateId)
+        && request.resource.data.adminUid == resource.data.adminUid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'address', 'units', 'code', 'codeExpiresAt', 'lat', 'lng', 'geoFor'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 3
+        && request.resource.data.name.size() <= 60
+        && request.resource.data.get('address', '') is string
+        && request.resource.data.get('address', '').size() <= 120
+        && (
+          request.resource.data.code == resource.data.code
+          || (
+            !exists(/databases/$(database)/documents/estateCodes/$(request.resource.data.code))
+            && getAfter(/databases/$(database)/documents/estateCodes/$(request.resource.data.code)).data.estateId == estateId
+            && getAfter(/databases/$(database)/documents/estateCodes/$(request.resource.data.code)).data.expiresAt == request.resource.data.codeExpiresAt
+          )
+        );
+
+      allow update: if isEstateAdmin(estateId)
+        && resource.data.adminUid == request.auth.uid
+        && request.resource.data.adminUid != resource.data.adminUid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['adminUid'])
+        && get(/databases/$(database)/documents/users/$(request.resource.data.adminUid)).data.estateId == estateId
+        && getAfter(/databases/$(database)/documents/users/$(request.resource.data.adminUid)).data.role == 'admin';
+
+      allow delete: if false;
+    }
+
+    match /estateCodes/{code} {
+      allow get: if signedIn()
+        && (resource == null || resource.data.get('expiresAt', request.time) > request.time);
+      allow list: if false;
+
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['estateId', 'expiresAt'])
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.expiresAt <= request.time + duration.value(40, 'm')
+        && getAfter(/databases/$(database)/documents/estates/$(request.resource.data.estateId)).data.adminUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/estates/$(request.resource.data.estateId)).data.code == code
+        && getAfter(/databases/$(database)/documents/estates/$(request.resource.data.estateId)).data.codeExpiresAt == request.resource.data.expiresAt;
+
+      allow update, delete: if false;
+    }
+
+    match /visitorTokens/{tokenId} {
+      allow read: if isApprovedMember(resource.data.estateId)
+        && (
+          roleIs('security')
+          || roleIs('admin')
+          || resource.data.get('residentId', null) == request.auth.uid
+        );
+
+      allow update: if isApprovedMember(resource.data.estateId)
+        && roleIs('security')
+        && resource.data.status == 'active'
+        && request.resource.data.status == 'used'
+        && request.resource.data.usedBy == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'usedAt', 'usedBy']);
+
+      allow create: if isApprovedMember(request.resource.data.estateId)
+        && roleIs('resident')
+        && request.resource.data.residentId == request.auth.uid
+        && request.resource.data.status == 'active'
+        && request.resource.data.code is string
+        && request.resource.data.code.matches('[0-9]{6}')
+        && request.resource.data.visitorName is string
+        && request.resource.data.visitorName.size() >= 2
+        && request.resource.data.visitorName.size() <= 60
+        && request.resource.data.validUntil is timestamp
+        && request.resource.data.validUntil > request.time
+        && request.resource.data.validUntil <= request.time + duration.value(3, 'd')
+        && request.resource.data.keys().hasOnly([
+          'estateId', 'residentId', 'hostName', 'unit', 'code',
+          'visitorName', 'status', 'validUntil', 'createdAt'
+        ]);
+
+      allow update: if isApprovedMember(resource.data.estateId)
+        && roleIs('resident')
+        && resource.data.residentId == request.auth.uid
+        && resource.data.status == 'active'
+        && request.resource.data.status == 'cancelled'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt']);
+
+      allow delete: if false;
+    }
+
+    function validCodeLock(lockId) {
+      return isApprovedMember(request.resource.data.estateId)
+        && roleIs('resident')
+        && lockId == request.resource.data.estateId + '_' + request.resource.data.code
+        && request.resource.data.keys().hasOnly(['estateId', 'code', 'tokenId', 'expiresAt'])
+        && request.resource.data.expiresAt > request.time;
+    }
+
+    match /visitorCodes/{lockId} {
+      allow get: if signedIn()
+        && roleIs('resident')
+        && lockId.matches(me().get('estateId', '') + '_[0-9]{6}');
+      allow list: if false;
+
+      allow create: if validCodeLock(lockId);
+      allow update: if validCodeLock(lockId) && resource.data.expiresAt <= request.time;
+      allow delete: if false;
+    }
+
+    match /announcements/{announcementId} {
+      allow read: if isApprovedMember(resource.data.estateId);
+
+      allow create: if isApprovedMember(request.resource.data.estateId)
+        && (roleIs('admin') || roleIs('facility'))
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.authorRole == me().get('role', null)
+        && request.resource.data.category in ['general', 'maintenance']
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 3
+        && request.resource.data.title.size() <= 80
+        && request.resource.data.body is string
+        && request.resource.data.body.size() >= 3
+        && request.resource.data.body.size() <= 600
+        && request.resource.data.authorName is string
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.keys().hasOnly([
+          'estateId', 'title', 'body', 'category',
+          'authorId', 'authorName', 'authorRole', 'createdAt'
+        ]);
+
+      allow delete: if isApprovedMember(resource.data.estateId)
+        && (
+          roleIs('admin')
+          || (roleIs('facility') && resource.data.authorId == request.auth.uid)
+        );
+
+      allow update: if false;
+    }
+
+    match /visitLogs/{logId} {
+      allow create: if isApprovedMember(request.resource.data.estateId)
+        && roleIs('security')
+        && request.resource.data.byUid == request.auth.uid
+        && request.resource.data.action in ['entered', 'denied']
+        && request.resource.data.at == request.time
+        && request.resource.data.keys().hasOnly([
+          'estateId', 'tokenId', 'visitorName', 'unit', 'hostName',
+          'action', 'day', 'byUid', 'byName', 'at'
+        ]);
+
+      allow read: if isApprovedMember(resource.data.estateId)
+        && (roleIs('security') || roleIs('admin'));
+
+      allow update, delete: if false;
+    }
+
+    match /issues/{issueId} {
+      allow read: if isApprovedMember(resource.data.estateId)
+        && (
+          roleIs('facility')
+          || roleIs('admin')
+          || resource.data.get('residentId', null) == request.auth.uid
+        );
+
+      allow create: if isApprovedMember(request.resource.data.estateId)
+        && roleIs('resident')
+        && request.resource.data.residentId == request.auth.uid
+        && request.resource.data.status == 'open'
+        && request.resource.data.category in ['plumbing', 'electrical', 'security', 'other']
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 3
+        && request.resource.data.title.size() <= 80
+        && request.resource.data.description is string
+        && request.resource.data.description.size() >= 3
+        && request.resource.data.description.size() <= 600
+        && request.resource.data.residentName is string
+        && request.resource.data.unit is string
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.keys().hasOnly([
+          'estateId', 'residentId', 'residentName', 'unit', 'category',
+          'title', 'description', 'status', 'createdAt', 'updatedAt'
+        ]);
+
+      allow update: if isApprovedMember(resource.data.estateId)
+        && roleIs('facility')
+        && request.resource.data.status in ['open', 'in_progress', 'resolved']
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.handledBy == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'handledBy', 'handledByName']);
+
+      allow delete: if false;
+    }
+
+    function validFacility(d) {
+      return d.name is string && d.name.size() >= 2 && d.name.size() <= 40
+        && d.description is string && d.description.size() <= 120
+        && d.openHour is int && d.closeHour is int
+        && d.openHour >= 0 && d.openHour <= 23
+        && d.closeHour >= 1 && d.closeHour <= 24
+        && d.closeHour > d.openHour
+        && d.slotMinutes in [30, 60, 120]
+        && d.active is bool
+        && d.keys().hasOnly([
+          'estateId', 'name', 'description', 'openHour', 'closeHour',
+          'slotMinutes', 'active', 'createdAt'
+        ]);
+    }
+
+    function slotLockExistsAfter(d) {
+      return existsAfter(/databases/$(database)/documents/bookingSlots/$(d.estateId + '_' + d.facilityId + '_' + d.date + '_' + d.slot));
+    }
+
+    match /facilities/{facilityId} {
+      allow read: if isApprovedMember(resource.data.estateId);
+
+      allow create: if isApprovedMember(request.resource.data.estateId)
+        && roleIs('facility')
+        && validFacility(request.resource.data)
+        && request.resource.data.createdAt == request.time;
+
+      allow update: if isApprovedMember(resource.data.estateId)
+        && roleIs('facility')
+        && validFacility(request.resource.data)
+        && request.resource.data.estateId == resource.data.estateId
+        && request.resource.data.slotMinutes == resource.data.slotMinutes
+        && request.resource.data.createdAt == resource.data.createdAt;
+
+      allow delete: if false;
+    }
+
+    match /bookings/{bookingId} {
+      allow read: if isApprovedMember(resource.data.estateId)
+        && (
+          roleIs('facility')
+          || roleIs('admin')
+          || resource.data.get('residentId', null) == request.auth.uid
+        );
+
+      allow create: if isApprovedMember(request.resource.data.estateId)
+        && roleIs('resident')
+        && request.resource.data.residentId == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.date is string
+        && request.resource.data.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && request.resource.data.slot is string
+        && request.resource.data.slot.matches('[0-9]{4}')
+        && request.resource.data.endSlot is string
+        && request.resource.data.endSlot.matches('[0-9]{4}')
+        && request.resource.data.endSlot > request.resource.data.slot
+        && request.resource.data.facilityName is string
+        && request.resource.data.residentName is string
+        && request.resource.data.unit is string
+        && get(/databases/$(database)/documents/facilities/$(request.resource.data.facilityId)).data.estateId == request.resource.data.estateId
+        && get(/databases/$(database)/documents/facilities/$(request.resource.data.facilityId)).data.active == true
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.keys().hasOnly([
+          'estateId', 'facilityId', 'facilityName', 'residentId', 'residentName', 'unit',
+          'date', 'slot', 'endSlot', 'status', 'createdAt', 'updatedAt'
+        ])
+        && slotLockExistsAfter(request.resource.data);
+
+      allow update: if isApprovedMember(resource.data.estateId)
+        && roleIs('facility')
+        && (
+          (resource.data.status == 'pending' && request.resource.data.status in ['approved', 'rejected'])
+          || (resource.data.status == 'approved' && request.resource.data.status == 'rejected')
+        )
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'handledByName'])
+        && (request.resource.data.status == 'approved' || !slotLockExistsAfter(resource.data));
+
+      allow update: if isApprovedMember(resource.data.estateId)
+        && roleIs('resident')
+        && resource.data.residentId == request.auth.uid
+        && resource.data.status in ['pending', 'approved']
+        && request.resource.data.status == 'cancelled'
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+        && !slotLockExistsAfter(resource.data);
+
+      allow delete: if false;
+    }
+
+    match /bookingSlots/{lockId} {
+      allow read: if isApprovedMember(resource.data.estateId);
+
+      allow create: if isApprovedMember(request.resource.data.estateId)
+        && roleIs('resident')
+        && request.resource.data.residentId == request.auth.uid
+        && lockId == request.resource.data.estateId + '_' + request.resource.data.facilityId + '_' + request.resource.data.date + '_' + request.resource.data.slot
+        && request.resource.data.keys().hasOnly(['estateId', 'facilityId', 'date', 'slot', 'bookingId', 'residentId'])
+        && getAfter(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.status == 'pending'
+        && getAfter(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.residentId == request.auth.uid
+        && getAfter(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.facilityId == request.resource.data.facilityId
+        && getAfter(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.date == request.resource.data.date
+        && getAfter(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.slot == request.resource.data.slot;
+
+      allow update: if false;
+
+      allow delete: if isApprovedMember(resource.data.estateId)
+        && (roleIs('facility') || resource.data.residentId == request.auth.uid)
+        && getAfter(/databases/$(database)/documents/bookings/$(resource.data.bookingId)).data.status in ['rejected', 'cancelled'];
+    }
+
+    function validAlertLock(lockId) {
+      return isApprovedMember(request.resource.data.estateId)
+        && roleIs('resident')
+        && request.resource.data.residentId == request.auth.uid
+        && lockId == request.resource.data.estateId + '_' + request.auth.uid
+        && request.resource.data.keys().hasOnly(['estateId', 'residentId', 'alertId', 'until'])
+        && request.resource.data.until is timestamp
+        && request.resource.data.until > request.time
+        && request.resource.data.until <= request.time + duration.value(5, 'm');
+    }
+
+    match /alertLocks/{lockId} {
+      allow read: if false;
+      allow create: if validAlertLock(lockId);
+      allow update: if validAlertLock(lockId) && resource.data.until <= request.time;
+      allow delete: if false;
+    }
+
+    match /alerts/{alertId} {
+      allow read: if isApprovedMember(resource.data.estateId)
+        && (
+          roleIs('admin') || roleIs('security') || roleIs('facility')
+          || resource.data.get('residentId', null) == request.auth.uid
+        );
+
+      allow create: if isApprovedMember(request.resource.data.estateId)
+        && roleIs('resident')
+        && request.resource.data.residentId == request.auth.uid
+        && request.resource.data.status == 'open'
+        && request.resource.data.type in ['medical', 'security', 'maintenance', 'other']
+        && request.resource.data.residentName is string
+        && request.resource.data.unit is string
+        && request.resource.data.message is string
+        && request.resource.data.message.size() >= 3
+        && request.resource.data.message.size() <= 500
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.keys().hasOnly([
+          'estateId', 'residentId', 'residentName', 'unit', 'type',
+          'message', 'status', 'createdAt', 'updatedAt'
+        ])
+        && getAfter(/databases/$(database)/documents/alertLocks/$(request.resource.data.estateId + '_' + request.auth.uid)).data.alertId == alertId
+        && getAfter(/databases/$(database)/documents/alertLocks/$(request.resource.data.estateId + '_' + request.auth.uid)).data.until > request.time;
+
+      allow update: if isApprovedMember(resource.data.estateId)
+        && (roleIs('admin') || roleIs('security') || roleIs('facility'))
+        && (
+          (resource.data.status == 'open' && request.resource.data.status in ['responding', 'resolved'])
+          || (resource.data.status == 'responding' && request.resource.data.status == 'resolved')
+        )
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'responderName']);
+
+      allow update: if isApprovedMember(resource.data.estateId)
+        && roleIs('resident')
+        && resource.data.residentId == request.auth.uid
+        && resource.data.status in ['open', 'responding']
+        && request.resource.data.status == 'resolved'
+        && request.resource.data.falseAlarm == true
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'falseAlarm', 'updatedAt']);
+
+      allow delete: if false;
+    }
+  }
+}

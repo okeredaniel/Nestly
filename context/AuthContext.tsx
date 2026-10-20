@@ -5,6 +5,8 @@ import { router } from 'expo-router';
 import { auth, db } from '@/lib/firebase';
 import { HOME_ROUTE } from '@/lib/roles';
 import AppModal from '@/components/ui/AppModal';
+import NestlyLoader from '@/components/ui/NestlyLoader';
+import SimpleLoader from '@/components/ui/SimpleLoader';
 
 export type Role = 'admin' | 'resident' | 'security' | 'facility';
 
@@ -15,6 +17,7 @@ export type Profile = {
   role: Role | null;
   status?: 'pending' | 'approved' | 'rejected' | null;
   unit?: string;
+  photoURL?: string | null;
 };
 
 type AuthState = {
@@ -22,6 +25,13 @@ type AuthState = {
   profile: Profile | null;
   loading: boolean;
   signOut: () => Promise<void>;
+  triggerSplash: () => void;
+};
+
+let suppressRoleNotice = false;
+
+export const setSuppressRoleNotice = (next: boolean) => {
+  suppressRoleNotice = next;
 };
 
 const AuthContext = createContext<AuthState>({
@@ -29,14 +39,51 @@ const AuthContext = createContext<AuthState>({
   profile: null,
   loading: true,
   signOut: async () => {},
+  triggerSplash: () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loaderVisible, setLoaderVisible] = useState(true);
   const [roleMoveNotice, setRoleMoveNotice] = useState<{ from: Role | null; to: Role | null } | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
   const previousRoleRef = useRef<Role | null>(null);
+  const signingOutRef = useRef(false);
+
+  const triggerSplash = () => {
+    // The branded Nestly loader is reserved for the first app-open boot, not for
+    // standard login/signup transitions.
+    if (loaderVisible) return;
+  };
+
+  const signOut = async () => {
+    signingOutRef.current = true;
+    setSigningOut(true);
+    setLoading(true);
+
+    try {
+      await firebaseSignOut(auth);
+      setProfile(null);
+      setUser(null);
+    } catch (error) {
+      console.warn('Sign out failed:', error);
+      setProfile(null);
+      setUser(null);
+    } finally {
+      setLoading(false);
+      setTimeout(() => {
+        setSigningOut(false);
+        signingOutRef.current = false;
+        try {
+          router.replace('/welcome' as any);
+        } catch {
+          // no-op: guard against navigation races during auth teardown
+        }
+      }, 3000);
+    }
+  };
 
   useEffect(() => {
     let unsubProfile: (() => void) | undefined;
@@ -51,7 +98,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (!u) {
         setProfile(null);
+        setUser(null);
         setLoading(false);
+        if (signingOutRef.current || !previousRoleRef.current) {
+          setTimeout(() => {
+            try {
+              router.replace('/welcome' as any);
+            } catch {
+              // no-op: guard against navigation races during auth teardown
+            }
+          }, 50);
+        }
         return;
       }
 
@@ -61,7 +118,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const nextProfile = snap.exists() ? (snap.data() as Profile) : null;
           const nextRole = nextProfile?.role ?? null;
 
-          if (previousRoleRef.current && previousRoleRef.current !== nextRole && nextRole) {
+          if (!suppressRoleNotice && previousRoleRef.current && previousRoleRef.current !== nextRole && nextRole) {
             setRoleMoveNotice({
               from: previousRoleRef.current,
               to: nextRole,
@@ -83,8 +140,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthState>(
-    () => ({ user, profile, loading, signOut: () => firebaseSignOut(auth) }),
-    [user, profile, loading],
+    () => ({ user, profile, loading, signOut, triggerSplash }),
+    [user, profile, loading, signOut],
   );
 
   const roleLabel = (role: Role | null) => {
@@ -111,6 +168,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider value={value}>
       {children}
+      {signingOut && <SimpleLoader label="Logging out..." />}
+      <NestlyLoader visible={loaderVisible} onFinished={() => setLoaderVisible(false)} />
       <AppModal
         visible={!!roleMoveNotice}
         icon="people"

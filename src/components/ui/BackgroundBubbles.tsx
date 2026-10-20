@@ -50,7 +50,13 @@ export default function BackgroundBubbles() {
   }, [anims]);
 
   return (
-    <Animated.View pointerEvents="none" style={[styles.root, { width, height }]}>
+    <Animated.View
+      pointerEvents="none"
+      testID="background-bubbles-root"
+      accessibilityLabel="Background bubbles"
+      accessibilityRole="image"
+      style={[styles.root, { width, height }]}
+    >
       {presets.map((p, i) => {
         const amp = Math.max(24, p.size * 0.18);
         const tx = anims[i].x.interpolate({ inputRange: [0, 1], outputRange: [-amp, amp] });
@@ -58,6 +64,9 @@ export default function BackgroundBubbles() {
         return (
           <Animated.View
             key={i}
+            testID={`background-bubble-${i + 1}`}
+            accessibilityLabel={`Background bubble ${i + 1}`}
+            accessibilityRole="image"
             style={[
               styles.circle,
               {
@@ -89,6 +98,7 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     zIndex: 0,
+    display: 'none'
   },
   circle: { position: 'absolute' },
 });

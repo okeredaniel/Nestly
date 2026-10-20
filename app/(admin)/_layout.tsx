@@ -1,10 +1,18 @@
-import { Tabs } from 'expo-router';
+import { Redirect, Tabs } from 'expo-router';
 import FloatingTabBar from '../../src/components/ui/FloatingTabBar';
+import { useAuth } from '@/context/AuthContext';
+import { HOME_ROUTE } from '@/lib/roles';
 
 export default function AdminLayout() {
+  const { profile, loading } = useAuth();
+
+  if (!loading && profile?.role && profile.role !== 'admin') {
+    return <Redirect href={HOME_ROUTE[profile.role] as any} />;
+  }
+
   return (
     <Tabs
-      tabBar={(props) => <FloatingTabBar {...props} />}
+      tabBar={(props: any) => <FloatingTabBar {...props} />}
       screenOptions={{ headerShown: false }}
     >
       <Tabs.Screen name="home" />

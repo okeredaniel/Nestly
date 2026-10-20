@@ -60,7 +60,7 @@ export default function RegisterEstateCard({ visible, onClose }: Props) {
         <SheetSuccess
           icon="business-outline"
           title="Estate created"
-          text={`${name.trim()} is ready, and you're its admin. Share this code so residents can request to join.`}
+          text={`${name.trim()} is ready, and you're its admin. Share this code so residents can request to join. It changes every 10 minutes, and you'll always find the current one on your dashboard.`}
         >
           <View style={styles.codeBox}>
             <Text style={styles.code}>{createdCode}</Text>

@@ -1,23 +1,16 @@
-import { ReactNode, useEffect, useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  ViewStyle,
-} from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Animated, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/context/AuthContext';
+import { useScreenIntro } from '@/hooks/useScreenIntro';
 import { db } from '@/lib/firebase';
-import { colors, radius, typography } from '../../src/theme';
+import { colors, radius } from '../../src/theme';
 
-type IconName = keyof typeof Ionicons.glyphMap;
 type Log = {
   id: string;
   name: string;
@@ -28,14 +21,13 @@ type Log = {
   day: string;
   at: number;
 };
-type Range = 'today' | 'yesterday' | 'week';
 type ActionFilter = 'all' | 'entered' | 'denied';
 
-const RANGES: { key: Range; label: string }[] = [
-  { key: 'today', label: 'Today' },
-  { key: 'yesterday', label: 'Yesterday' },
-  { key: 'week', label: '7 days' },
-];
+// Everything is shown in one list, newest day first (Today, Yesterday, then older days).
+// Firestore's "in" filter allows at most 30 values, so this is the longest window we can ask for.
+const HISTORY_DAYS = 30;
+
+const INK = '#0F0A2E';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
@@ -61,6 +53,29 @@ const dayLabel = (key: string) => {
   });
 };
 
+const initials = (name: string) => {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+};
+
+const AVATARS: readonly [string, string][] = [
+  ['#8B6CFF', '#5B3CF0'],
+  ['#4F9BFF', '#2563EB'],
+  ['#FF8FB1', '#E5457A'],
+  ['#FFB45E', '#F08A1C'],
+  ['#4FD6B4', '#14A38B'],
+  ['#B28DFF', '#7E4DF0'],
+];
+
+const avatarColors = (name: string): [string, string] => {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  const [a, b] = AVATARS[h % AVATARS.length];
+  return [a, b];
+};
+
 // Shown only in development builds, so guards never see technical text.
 const errorHint = (code: string) => {
   if (!__DEV__ || !code) return '';
@@ -71,28 +86,45 @@ const errorHint = (code: string) => {
   return code;
 };
 
-function Glass({ style, children }: { style?: ViewStyle; children: ReactNode }) {
-  return <View style={[styles.glass, style]}>{children}</View>;
+function EmptyState({
+  icon,
+  title,
+  sub,
+  hint,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  sub: string;
+  hint?: string;
+}) {
+  return (
+    <View style={styles.emptyCard}>
+      <View style={styles.emptyIcon}>
+        <Ionicons name={icon} size={24} color={colors.primary} />
+      </View>
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptySub}>{sub}</Text>
+      {!!hint && <Text style={styles.devHint}>{hint}</Text>}
+    </View>
+  );
 }
 
 export default function SecurityHistory() {
   const insets = useSafeAreaInsets();
   const { profile, loading } = useAuth();
+  const { style: introStyle } = useScreenIntro();
 
   const [logs, setLogs] = useState<Log[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [errorCode, setErrorCode] = useState('');
-  const [range, setRange] = useState<Range>('today');
   const [actionFilter, setActionFilter] = useState<ActionFilter>('all');
 
+  // The "today" key changes at midnight, which re-subscribes with fresh day keys.
+  const todayKey = fmtDay(0);
   const keys = useMemo(
-    () =>
-      range === 'today'
-        ? [fmtDay(0)]
-        : range === 'yesterday'
-          ? [fmtDay(1)]
-          : Array.from({ length: 7 }, (_, i) => fmtDay(i)),
-    [range]
+    () => Array.from({ length: HISTORY_DAYS }, (_, i) => fmtDay(i)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [todayKey]
   );
 
   const estateId = profile?.estateId ?? null;
@@ -161,6 +193,7 @@ export default function SecurityHistory() {
     [logs, actionFilter]
   );
 
+  // Newest first, grouped by day: Today, Yesterday, then older days.
   const sections = useMemo(() => {
     const sorted = [...shown].sort((a, b) => b.at - a.at);
     const out: { key: string; label: string; items: Log[] }[] = [];
@@ -175,313 +208,274 @@ export default function SecurityHistory() {
     return out;
   }, [shown]);
 
-  const ACTIONS: { key: ActionFilter; label: string }[] = [
-    { key: 'all', label: `All ${counts.all}` },
-    { key: 'entered', label: `Let in ${counts.entered}` },
-    { key: 'denied', label: `Denied ${counts.denied}` },
-  ];
-
-  const stats: { icon: IconName; value: number; label: string; tint: string; bg: string }[] = [
-    { icon: 'log-in-outline', value: counts.entered, label: 'Let in', tint: '#17653A', bg: '#DDF5E6' },
-    { icon: 'people-outline', value: counts.all, label: 'Total visits', tint: '#3C2A99', bg: '#EAE4FF' },
-    { icon: 'close-circle-outline', value: counts.denied, label: 'Denied', tint: '#A32D2D', bg: '#FFF1F1' },
+  const ACTIONS: { key: ActionFilter; label: string; dot?: string }[] = [
+    { key: 'all', label: 'All' },
+    { key: 'entered', label: 'Let in', dot: '#22A862' },
+    { key: 'denied', label: 'Denied', dot: '#E5484D' },
   ];
 
   const waiting = loading || logs === null;
 
   return (
-    <LinearGradient colors={['#DCD0FF', '#EFE9FF', '#FAF8FF']} style={{ flex: 1 }}>
+    <Animated.View style={[{ flex: 1 }, introStyle]}>
+      <LinearGradient colors={['#DCD0FF', '#EFE9FF', '#FAF8FF']} style={{ flex: 1 }}>
       <ScrollView
         contentContainerStyle={{
           paddingTop: insets.top + 12,
-          paddingBottom: insets.bottom + 120,
-          paddingHorizontal: 20,
+          paddingBottom: insets.bottom + 40,
+          paddingHorizontal: 18,
         }}
         showsVerticalScrollIndicator={false}
       >
+        {/* header */}
         <View style={styles.topBar}>
           <Pressable
             onPress={() => router.back()}
             style={({ pressed }) => [styles.backBtn, pressed && { transform: [{ scale: 0.96 }] }]}
             accessibilityLabel="Back to security home"
           >
-            <Ionicons name="arrow-back" size={18} color={colors.primary} />
+            <Ionicons name="arrow-back" size={19} color='black' />
           </Pressable>
           <Text style={styles.title}>History</Text>
-          <View style={styles.topSpacer} />
-        </View>
-        {/* <Text style={styles.subtitle}>{subtitle}</Text> */}
-
-        <View style={styles.statsRow}>
-          {stats.map((s) => (
-            <View key={s.label} style={styles.statTile}>
-              <View style={[styles.statIcon, { backgroundColor: s.bg }]}>
-                <Ionicons name={s.icon} size={18} color={s.tint} />
-              </View>
-              <Text style={styles.statValue}>{waiting ? '–' : s.value}</Text>
-              <Text style={styles.statLabel} numberOfLines={1}>
-                {s.label}
-              </Text>
-            </View>
-          ))}
+          {/* same width as the back button so the title sits in the true middle */}
+          <View style={styles.backBtnSpacer} />
         </View>
 
-        <View style={styles.chips}>
-          {RANGES.map((r) => {
-            const active = range === r.key;
-            return (
-              <Pressable
-                key={r.key}
-                onPress={() => setRange(r.key)}
-                style={[styles.chip, active && styles.chipActive]}
-              >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{r.label}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        <View style={[styles.chips, { marginBottom: 20 }]}>
+        {/* outcome filter with counts */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ flexGrow: 0 }}
+          contentContainerStyle={styles.chips}
+        >
           {ACTIONS.map((a) => {
-            const active = actionFilter === a.key;
+            const on = actionFilter === a.key;
             return (
               <Pressable
                 key={a.key}
-                onPress={() => setActionFilter(a.key)}
-                style={[styles.chipSmall, active && styles.chipSmallActive]}
+                onPress={() => {
+                  Haptics.selectionAsync().catch(() => {});
+                  setActionFilter(a.key);
+                }}
+                style={[styles.chip, on && styles.chipOn]}
               >
-                <Text style={[styles.chipSmallText, active && styles.chipSmallTextActive]}>
-                  {a.label}
-                </Text>
+                {!!a.dot && <View style={[styles.chipDot, { backgroundColor: on ? '#FFFFFF' : a.dot }]} />}
+                <Text style={[styles.chipText, on && { color: '#FFFFFF' }]}>{a.label}</Text>
+                <View style={[styles.chipCountWrap, on && { backgroundColor: 'rgba(255,255,255,0.22)' }]}>
+                  <Text style={[styles.chipCount, on && { color: '#FFFFFF' }]}>
+                    {waiting ? '–' : counts[a.key]}
+                  </Text>
+                </View>
               </Pressable>
             );
           })}
-        </View>
+        </ScrollView>
 
+        {/* list */}
         {waiting ? (
           <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
         ) : loadError ? (
-          <Glass style={styles.emptyCard}>
-            <View style={styles.emptyIcon}>
-              <Ionicons name="cloud-offline-outline" size={22} color={colors.primary} />
-            </View>
-            <Text style={styles.emptyTitle}>Could not load history</Text>
-            <Text style={styles.emptySub}>Check your connection and try again.</Text>
-            {!!errorHint(errorCode) && <Text style={styles.devHint}>{errorHint(errorCode)}</Text>}
-          </Glass>
+          <EmptyState
+            icon="cloud-offline-outline"
+            title="Could not load history"
+            sub="Check your connection and try again."
+            hint={errorHint(errorCode)}
+          />
         ) : !estateId ? (
-          <Glass style={styles.emptyCard}>
-            <View style={styles.emptyIcon}>
-              <Ionicons name="business-outline" size={22} color={colors.primary} />
-            </View>
-            <Text style={styles.emptyTitle}>No estate linked</Text>
-            <Text style={styles.emptySub}>Your account is not linked to an estate yet.</Text>
-          </Glass>
+          <EmptyState
+            icon="business-outline"
+            title="No estate linked"
+            sub="Your account is not linked to an estate yet."
+          />
         ) : sections.length === 0 ? (
-          <Glass style={styles.emptyCard}>
-            <View style={styles.emptyIcon}>
-              <Ionicons name="time-outline" size={22} color={colors.primary} />
-            </View>
-            <Text style={styles.emptyTitle}>No visits here yet</Text>
-            <Text style={styles.emptySub}>
-              Visitors you let in or deny will show up in this list.
-            </Text>
-          </Glass>
+          <EmptyState
+            icon="time-outline"
+            title="No visits yet"
+            sub="Visitors you let in or deny will show up in this list."
+          />
         ) : (
           sections.map((s) => (
             <View key={s.key}>
-              <Text style={styles.dayHeader}>{s.label}</Text>
-              {s.items.map((l) => {
-                const entered = l.action === 'entered';
-                return (
-                  <Glass key={l.id} style={styles.row}>
-                    <View
-                      style={[
-                        styles.rowIcon,
-                        { backgroundColor: entered ? '#DDF5E6' : '#FFF1F1' },
-                      ]}
-                    >
-                      <Ionicons
-                        name={entered ? 'log-in-outline' : 'close-circle-outline'}
-                        size={22}
-                        color={entered ? '#17653A' : '#A32D2D'}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.name} numberOfLines={1}>
-                        {l.name}
-                      </Text>
-                      <Text style={styles.meta} numberOfLines={1}>
-                        {l.unit ? `Unit ${l.unit}` : 'Unit not set'}
-                        {l.host ? ` · ${l.host}` : ''}
-                      </Text>
-                      {!!l.by && (
-                        <Text style={styles.by} numberOfLines={1}>
-                          Logged by {l.by}
+              <View style={styles.dayHead}>
+                <Text style={styles.dayTitle}>{s.label}</Text>
+                <Text style={styles.dayCount}>
+                  {s.items.length} {s.items.length === 1 ? 'visit' : 'visits'}
+                </Text>
+              </View>
+
+              <View style={styles.dayCard}>
+                {s.items.map((l, i) => {
+                  const entered = l.action === 'entered';
+                  return (
+                    <View key={l.id} style={[styles.row, i > 0 && styles.rowLine]}>
+                      <LinearGradient
+                        colors={avatarColors(l.name)}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={styles.avatar}
+                      >
+                        <Text style={styles.avatarText}>{initials(l.name)}</Text>
+                      </LinearGradient>
+
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.name} numberOfLines={1}>
+                          {l.name}
                         </Text>
-                      )}
+                        <Text style={styles.meta} numberOfLines={1}>
+                          {l.unit ? `Unit ${l.unit}` : 'Unit not set'}
+                          {l.host ? ` · ${l.host}` : ''}
+                        </Text>
+                        {!!l.by && (
+                          <Text style={styles.by} numberOfLines={1}>
+                            Logged by {l.by}
+                          </Text>
+                        )}
+                      </View>
+
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <View style={[styles.tag, { backgroundColor: entered ? '#DDF5E6' : '#FFE9E9' }]}>
+                          <View style={[styles.tagDot, { backgroundColor: entered ? '#22A862' : '#E5484D' }]} />
+                          <Text style={[styles.tagText, { color: entered ? '#17653A' : '#A32D2D' }]}>
+                            {entered ? 'Let in' : 'Denied'}
+                          </Text>
+                        </View>
+                        <Text style={styles.time}>{timeLabel(l.at)}</Text>
+                      </View>
                     </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={[styles.action, { color: entered ? '#17653A' : '#A32D2D' }]}>
-                        {entered ? 'Let in' : 'Denied'}
-                      </Text>
-                      <Text style={styles.time}>{timeLabel(l.at)}</Text>
-                    </View>
-                  </Glass>
-                );
-              })}
+                  );
+                })}
+              </View>
             </View>
           ))
         )}
       </ScrollView>
-    </LinearGradient>
+      </LinearGradient>
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  glass: {
-    backgroundColor: 'rgba(255,255,255,0.62)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 24,
-    shadowColor: '#6C47FF',
-    shadowOpacity: 0.12,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-  },
-
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
+  /* header */
+  topBar: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 13, marginTop: 0 },
   backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#F1EBFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  topSpacer: { width: 40, height: 40, marginBottom: 20 },
-
-  statsRow: { flexDirection: 'row', gap: 10, marginBottom: 18 },
-  statTile: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 5,
+    width: 44,
+    height: 44,
     borderRadius: 22,
     backgroundColor: 'rgba(255,255,255,0.72)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.95)',
-    shadowColor: '#5B3CF0',
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-  },
-  statIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 8,
   },
-  statValue: {
-    fontFamily: 'PlusJakartaSans_800ExtraBold',
-    fontSize: 22,
-    lineHeight: 26,
-    color: '#0F0A2E',
-  },
-  statLabel: {
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    fontSize: 11,
-    color: colors.textMuted,
-    marginTop: 1,
-  },
-
+  backBtnSpacer: { width: 44, height: 44 },
   title: {
-    ...typography.h1,
+    flex: 1,
+    textAlign: 'center',
     fontFamily: 'PlusJakartaSans_800ExtraBold',
-    fontSize: 28,
+    fontSize: 30,
     letterSpacing: -0.5,
-    color: '#0F0A2E',
+    color: INK,
   },
-  subtitle: { ...typography.body, color: colors.textMuted, marginTop: 2, marginBottom: 18 },
 
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  /* outcome chips */
+  chips: { gap: 8, paddingBottom: 10, paddingRight: 18 },
   chip: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: radius.full,
-    backgroundColor: 'rgba(255,255,255,0.7)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.95)',
-  },
-  chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  chipText: { ...typography.caption, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },
-  chipTextActive: { color: '#FFFFFF' },
-
-  chipSmall: {
-    paddingVertical: 7,
-    paddingHorizontal: 12,
-    borderRadius: radius.full,
-    backgroundColor: 'rgba(255,255,255,0.5)',
-  },
-  chipSmallActive: { backgroundColor: colors.primary },
-  chipSmallText: { fontSize: 12, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textMuted },
-  chipSmallTextActive: { color: "white", fontFamily: 'PlusJakartaSans_700Bold' },
-
-  dayHeader: {
-    fontFamily: 'PlusJakartaSans_700Bold',
-    fontSize: 13,
-    color: colors.textMuted,
-    marginTop: 6,
-    marginBottom: 10,
-  },
-  row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    padding: 14,
-    marginBottom: 10,
-    borderRadius: 20,
-    shadowColor: '#5B3CF0',
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
+    gap: 7,
+    height: 38,
+    paddingLeft: 14,
+    paddingRight: 8,
+    borderRadius: radius.full,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: 'rgba(108,71,255,0.14)',
   },
-  rowIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 15,
+  chipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  chipDot: { width: 7, height: 7, borderRadius: 4 },
+  chipText: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13, color: colors.text },
+  chipCountWrap: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    paddingHorizontal: 6,
+    backgroundColor: '#F1EBFF',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  name: { ...typography.bodyStrong, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },
-  meta: { ...typography.caption, color: colors.textMuted, marginTop: 2 },
-  by: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 11, color: colors.textMuted, marginTop: 2 },
-  action: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 12.5 },
-  time: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
+  chipCount: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 11.5, color: colors.primary },
 
-  emptyCard: { alignItems: 'center', padding: 40, borderRadius: 20 },
-  emptyIcon: {
-    width: 48,
-    height: 48,
+  /* day groups */
+  dayHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 4,
+    marginBottom: 10,
+    paddingHorizontal: 2,
+  },
+  dayTitle: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 15, color: INK },
+  dayCount: { fontFamily: 'PlusJakartaSans_600SemiBold', fontSize: 12, color: colors.textMuted },
+  dayCard: {
+    backgroundColor: '#FFFFFF',
     borderRadius: 24,
-    backgroundColor: colors.primarySoft,
+    paddingHorizontal: 14,
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(108,71,255,0.06)',
+    shadowColor: '#5B3CF0',
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
+  },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13 },
+  rowLine: { borderTopWidth: 1, borderTopColor: 'rgba(108,71,255,0.08)' },
+  avatar: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 15, color: '#FFFFFF', letterSpacing: 0.3 },
+  name: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 14.5, color: INK },
+  meta: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12.5, color: colors.textMuted, marginTop: 2 },
+  by: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 11, color: colors.textMuted, marginTop: 2 },
+  tag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    paddingVertical: 4,
+    paddingHorizontal: 9,
+  },
+  tagDot: { width: 6, height: 6, borderRadius: 3 },
+  tagText: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 11.5 },
+  time: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 11, color: colors.textMuted, marginTop: 5 },
+
+  /* empty */
+  emptyCard: {
+    alignItems: 'center',
+    paddingVertical: 36,
+    paddingHorizontal: 24,
+    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(108,71,255,0.06)',
+  },
+  emptyIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#F1EBFF',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
   },
-  emptyTitle: {
-    ...typography.bodyStrong,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: colors.text,
+  emptyTitle: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 16, color: INK },
+  emptySub: {
+    fontFamily: 'PlusJakartaSans_500Medium',
+    fontSize: 13,
+    color: colors.textMuted,
+    marginTop: 4,
+    textAlign: 'center',
+    maxWidth: 240,
   },
-  emptySub: { ...typography.caption, color: colors.textMuted, marginTop: 4, textAlign: 'center' },
   devHint: {
     fontFamily: 'PlusJakartaSans_600SemiBold',
     fontSize: 11,

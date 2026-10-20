@@ -1,5 +1,5 @@
-import ComingSoon from '../../src/components/ui/ComingSoon';
+import SettingsScreen from '@/components/settings/SettingsScreen';
 
 export default function Settings() {
-  return <ComingSoon title="Settings" />;
+  return <SettingsScreen />;
 }

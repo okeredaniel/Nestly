@@ -26,7 +26,8 @@ export default function BottomCard({ visible, onClose, children }: Props) {
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [mounted, setMounted] = useState(visible);
-  const anim = useRef(new Animated.Value(0)).current;
+  const animRef = useRef(new Animated.Value(0));
+  const anim = animRef.current;
 
   useEffect(() => {
     if (visible) {
@@ -90,7 +91,7 @@ export default function BottomCard({ visible, onClose, children }: Props) {
 
 export function SheetTitle({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
-    <View style={{ marginBottom: 20 }}>
+    <View style={{ marginBottom: 14}}>
       <Text style={styles.title}>{title}</Text>
       {!!subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
     </View>
@@ -160,7 +161,7 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textMuted,
     textAlign: 'center',
-    marginTop: spacing.sm,
+    // marginTop: spa,
     alignSelf: 'center',
     maxWidth: 250,
     fontSize: 13,

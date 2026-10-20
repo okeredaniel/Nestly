@@ -9,7 +9,7 @@ type Props = {
   size?: number;
 };
 
-export default function LogoutButton({ onPress, accessibilityLabel = 'Log out', size = 44 }: Props) {
+export default function LogoutButton({ onPress, accessibilityLabel = 'Log out', size = 30 }: Props) {
   const iconSize = Math.max(18, Math.round(size * 0.43));
   return (
     <Pressable
@@ -25,7 +25,7 @@ export default function LogoutButton({ onPress, accessibilityLabel = 'Log out', 
       >
         <LinearGradient
           colors={["#F26666", "#DC2626"]}
-          style={[styles.inner, { width: Math.round(size * 0.72), height: Math.round(size * 0.72), borderRadius: Math.round(size * 0.36) }]}
+          style={[styles.inner, { width: Math.round(size * 0.99), height: Math.round(size * 0.99), borderRadius: Math.round(size * 0.70) }]}
         >
           <Ionicons name="log-out" size={iconSize} color="#FFFFFF" />
         </LinearGradient>

@@ -47,8 +47,19 @@ export default function AppModal({
   confirmDanger = false,
   icon,
 }: Props) {
-  const tone = confirmDanger ? TONES.danger : TONES.primary;
-  const iconName = icon ?? (confirmDanger ? 'warning' : 'information-circle');
+  // Callers usually clear their data (setNotice(null), setSelected(null)) the moment they close
+  // the modal, but the modal stays on screen for the fade-out. So while it is visible we remember
+  // what it shows, and during the fade-out we keep drawing that remembered content instead of the
+  // now-empty props. Otherwise the text vanishes first and only the badge and button are left.
+  const current = { title, message, children, cancelText, confirmText, onConfirm, confirmDanger, icon };
+  const [lastContent, setLastContent] = useState(current);
+  useEffect(() => {
+    if (visible) setLastContent(current);
+  }, [visible, title, message, children, cancelText, confirmText, onConfirm, confirmDanger, icon]);
+  const c = visible ? current : lastContent;
+
+  const tone = c.confirmDanger ? TONES.danger : TONES.primary;
+  const iconName = c.icon ?? (c.confirmDanger ? 'warning' : 'information-circle');
 
   // Keep the modal mounted until the exit animation finishes.
   const [mounted, setMounted] = useState(visible);
@@ -75,9 +86,9 @@ export default function AppModal({
     }
   }, [visible, anim]);
 
-  const hasCancel = !!cancelText;
-  const hasConfirm = !!confirmText && !!onConfirm;
-  const hasTitle = !!title;
+  const hasCancel = !!c.cancelText;
+  const hasConfirm = !!c.confirmText && !!c.onConfirm;
+  const hasTitle = !!c.title;
 
   return (
     <Modal
@@ -87,7 +98,8 @@ export default function AppModal({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <View style={styles.root}>
+      {/* while fading out, ignore taps so a button cannot be pressed twice */}
+      <View style={styles.root} pointerEvents={visible ? 'auto' : 'none'}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: anim }]} />
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
 
@@ -125,9 +137,9 @@ export default function AppModal({
 
           {/* Content */}
           <View style={[styles.content, !hasTitle && styles.contentNoTitle]}>
-            {!!title && <Text style={styles.title}>{title}</Text>}
-            {!!message && <Text style={styles.message}>{message}</Text>}
-            {!!children && <View style={styles.extra}>{children}</View>}
+            {!!c.title && <Text style={styles.title}>{c.title}</Text>}
+            {!!c.message && <Text style={styles.message}>{c.message}</Text>}
+            {!!c.children && <View style={styles.extra}>{c.children}</View>}
 
             {(hasCancel || hasConfirm) && (
               <View style={styles.actions}>
@@ -140,13 +152,13 @@ export default function AppModal({
                       pressed && { opacity: 0.7 },
                     ]}
                   >
-                    <Text style={styles.cancelText}>{cancelText}</Text>
+                    <Text style={styles.cancelText}>{c.cancelText}</Text>
                   </Pressable>
                 )}
 
                 {hasConfirm && (
                   <Pressable
-                    onPress={() => onConfirm?.()}
+                    onPress={() => c.onConfirm?.()}
                     style={({ pressed }) => [
                       styles.confirmWrap,
                       { flex: hasCancel ? 1.25 : 1, shadowColor: tone.glow },
@@ -159,7 +171,7 @@ export default function AppModal({
                       end={{ x: 1, y: 1 }}
                       style={styles.confirm}
                     >
-                      <Text style={styles.confirmText}>{confirmText}</Text>
+                      <Text style={styles.confirmText}>{c.confirmText}</Text>
                     </LinearGradient>
                   </Pressable>
                 )}
@@ -195,17 +207,17 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 16 },
     elevation: 14,
   },
-cardClip: {
-  position: 'absolute',
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  borderRadius: 32,
-  overflow: 'hidden',
-  borderWidth: 1,
-  borderColor: 'rgba(108, 71, 255, 0.10)',
-},
+  cardClip: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 32,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(108, 71, 255, 0.10)',
+  },
   headerTint: {
     height: 130,
   },
@@ -255,7 +267,7 @@ cardClip: {
     color: '#0F0A2E',
     textAlign: 'center',
     marginBottom: 4,
-    marginTop:5
+    marginTop: 5,
   },
   message: {
     ...typography.body,
@@ -280,13 +292,15 @@ cardClip: {
     borderRadius: radius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#eeeeee',
+    backgroundColor: '#FFF1F1',
     borderWidth: 1.5,
-    borderColor: 'rgba(108, 71, 255, 0.14)',
+    borderColor: 'rgba(220, 38, 38, 0.22)',
+    paddingHorizontal: 18,
   },
   cancelText: {
     ...typography.button,
-    color: 'black',
+    color: '#C92D2D',
+    fontFamily: 'PlusJakartaSans_700Bold',
   },
   confirmWrap: {
     borderRadius: radius.full,

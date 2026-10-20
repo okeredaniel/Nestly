@@ -1,0 +1,37 @@
+Needed Firestore rules and auth behavior for the succession flow.
+
+1) In AuthContext, keep a suppress flag for role-change notices during admin handoff.
+
+   let suppressRoleNotice = false;
+   export const setSuppressRoleNotice = (next: boolean) => {
+     suppressRoleNotice = next;
+   };
+
+   ... inside the user doc snapshot:
+   if (!suppressRoleNotice && previousRoleRef.current && previousRoleRef.current !== nextRole && nextRole) {
+     setRoleMoveNotice({ from: previousRoleRef.current, to: nextRole });
+   }
+
+2) If a user is demoted from admin to resident, redirect them to the correct home route.
+   This is already driven by HOME_ROUTE in the auth provider, and the route is:
+   admin -> /(admin)/home
+   resident -> /(resident)/resident-home
+   security -> /(security)/security-home
+   facility -> /(facility)/home
+
+3) Firestore rules should allow:
+   - a user to update the name field on their own profile
+   - a user to set unit only when joining an estate / request-to-join flow
+   - the admin to read and approve members in the estate
+   - any approved member to read estate data for their estate
+   - the admin to update estate adminUid and role handoff fields atomically via batch
+   - a user to delete their own profile record only after proper reauth and handoff
+
+   Example rule pattern:
+   match /users/{userId} {
+     allow read: if request.auth != null && (resource.data.estateId == request.auth.uid || resource.data.uid == request.auth.uid || resource.data.role == 'admin');
+     allow update: if request.auth != null && request.auth.uid == userId && request.resource.data.name is string;
+     allow create: if request.auth != null && request.auth.uid == userId;
+   }
+
+   The important part is that the unit field must stay read-only outside the join flow, and admin handoff must be executed in one batch.

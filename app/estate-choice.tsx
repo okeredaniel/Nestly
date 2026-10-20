@@ -82,6 +82,7 @@ export default function ChooseEstate() {
   const insets = useSafeAreaInsets();
   const [sheet, setSheet] = useState<'join' | 'register' | null>(null);
   const { profile } = useAuth();
+  const declined = profile?.status === 'rejected';
 
   useEffect(() => {
     if (profile?.estateId && profile.role === 'resident' && profile.status === 'approved') {
@@ -129,6 +130,10 @@ export default function ChooseEstate() {
     else router.replace('/welcome' as any);
   };
 
+  // Equal space above and below so the whole block sits in the middle of the page,
+  // while leaving room at the top for the back button.
+  const verticalPad = Math.max(insets.top + 56, insets.bottom + 24);
+
   return (
     <LinearGradient colors={['#FFFFFF', '#F5F1FF']} style={{ flex: 1 }}>
       <Pressable onPress={goBackToWelcome} style={[styles.backButton, { top: insets.top + 12 }]}>
@@ -144,99 +149,122 @@ export default function ChooseEstate() {
       <ScrollView
         contentContainerStyle={{
           flexGrow: 1,
-          paddingTop: insets.top + 50,
-          paddingBottom: Math.max(insets.bottom, 16) + 16,
+          justifyContent: 'center',
+          paddingTop: verticalPad,
+          paddingBottom: verticalPad,
         }}
         showsVerticalScrollIndicator={false}
         bounces={false}
       >
-        {/* orbit */}
-        <View style={{ width: orbit, height: orbit, alignSelf: 'center' }}>
-          <View
-            style={{
-              position: 'absolute',
-              width: R * 1.2,
-              height: R * 1.2,
-              borderRadius: R * 0.6,
-              left: c - R * 0.6,
-              top: c - R * 0.6,
-              backgroundColor: 'rgba(108,71,255,0.07)',
-            }}
-          />
-          <View style={ring(R * 2 + 18, 0.14)} />
-          <View style={ring(R * 1.5, 0.12)} />
-          <View style={ring(R * 1.05, 0.1)} />
+        {/* one centered container: orbit + text + buttons */}
+        <View style={styles.centerBlock}>
+          {/* orbit */}
+          <View style={{ width: orbit, height: orbit, alignSelf: 'center' }}>
+            <View
+              style={{
+                position: 'absolute',
+                width: R * 1.2,
+                height: R * 1.2,
+                borderRadius: R * 0.6,
+                left: c - R * 0.6,
+                top: c - R * 0.6,
+                backgroundColor: 'rgba(108,71,255,0.07)',
+              }}
+            />
+            <View style={ring(R * 2 + 18, 0.14)} />
+            <View style={ring(R * 1.5, 0.12)} />
+            <View style={ring(R * 1.05, 0.1)} />
 
-          <Animated.View
-            style={{ position: 'absolute', width: orbit, height: orbit, transform: [{ rotate }] }}
-          >
-            {AVATARS.map((a, i) => {
-              const angle = (i / AVATARS.length) * Math.PI * 2 - Math.PI / 2;
-              return (
-                <Tile
-                  key={i}
-                  a={a}
-                  x={c + R * Math.cos(angle)}
-                  y={c + R * Math.sin(angle)}
-                  counter={counter}
-                />
-              );
-            })}
-          </Animated.View>
+            <Animated.View
+              style={{ position: 'absolute', width: orbit, height: orbit, transform: [{ rotate }] }}
+            >
+              {AVATARS.map((a, i) => {
+                const angle = (i / AVATARS.length) * Math.PI * 2 - Math.PI / 2;
+                return (
+                  <Tile
+                    key={i}
+                    a={a}
+                    x={c + R * Math.cos(angle)}
+                    y={c + R * Math.sin(angle)}
+                    counter={counter}
+                  />
+                );
+              })}
+            </Animated.View>
 
-          <View
-            style={[
-              styles.centerTile,
-              { width: CENTER, height: CENTER, left: c - CENTER / 2, top: c - CENTER / 2 },
-            ]}
-          >
-            <Image source={ESTATE_IMAGE} style={styles.centerImage} resizeMode="cover" />
+            <View
+              style={[
+                styles.centerTile,
+                { width: CENTER, height: CENTER, left: c - CENTER / 2, top: c - CENTER / 2 },
+              ]}
+            >
+              <Image source={ESTATE_IMAGE} style={styles.centerImage} resizeMode="cover" />
+            </View>
           </View>
-        </View>
 
-        {/* text */}
-        <View style={styles.textBlock}>
-          <Text style={styles.title}>Inspired people,</Text>
-          <MaskedView
-            style={{ alignSelf: 'center' }}
-            maskElement={<Text style={[styles.title, { backgroundColor: 'transparent' }]}>Better estates.</Text>}
-          >
-            <LinearGradient
-              colors={['#4F2FE0', '#9B7BFF']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
+          {/* text */}
+          <View style={styles.textBlock}>
+            <Text style={styles.title}>Inspired people,</Text>
+            <MaskedView
+              style={{ alignSelf: 'center' }}
+              maskElement={<Text style={[styles.title, { backgroundColor: 'transparent' }]}>Better estates.</Text>}
             >
-              <Text style={[styles.title, { opacity: 0 }]}>stronger estates.</Text>
-            </LinearGradient>
-          </MaskedView>
-          <Text style={styles.subtitle}>
-            Be part of a community that values safety, connection and shared spaces.
-          </Text>
-        </View>
+              <LinearGradient
+                colors={['#4F2FE0', '#9B7BFF']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+              >
+                <Text style={[styles.title, { opacity: 0 }]}>Better estates.</Text>
+              </LinearGradient>
+            </MaskedView>
+            <Text style={styles.subtitle}>
+              Be part of a community that values safety, connection and shared spaces.
+            </Text>
+          </View>
 
-        {/* buttons */}
-        <View style={styles.buttons}>
-          <Pressable onPress={joinEstate} style={({ pressed }) => [styles.joinWrap, pressed && { opacity: 0.92 }]}>
-            <LinearGradient
-              colors={['#7C5CFF', '#5B3CF0']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.btnInner}
+          {/* buttons */}
+          <View style={styles.buttons}>
+            <Pressable onPress={joinEstate} style={({ pressed }) => [styles.joinWrap, pressed && { opacity: 0.92 }]}>
+              <LinearGradient
+                colors={['#7C5CFF', '#5B3CF0']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.btnInner}
+              >
+                <Ionicons name="people-outline" size={22} color="#FFFFFF" />
+                <Text style={styles.joinText} numberOfLines={1} adjustsFontSizeToFit>
+                  Join existing estate
+                </Text>
+                <Ionicons name="arrow-forward" size={22} color="#FFFFFF" />
+              </LinearGradient>
+            </Pressable>
+
+            <Pressable
+              onPress={registerEstate}
+              style={({ pressed }) => [styles.registerBtn, pressed && { opacity: 0.88 }]}
             >
-              <Ionicons name="people-outline" size={23} color="#FFFFFF" />
-              <Text style={styles.joinText}>Join existing estate</Text>
-              <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
-            </LinearGradient>
-          </Pressable>
+              <Ionicons name="add-circle-outline" size={22} color={colors.primary} />
+              <Text style={styles.registerText} numberOfLines={1} adjustsFontSizeToFit>
+                Register new estate
+              </Text>
+              <Ionicons name="arrow-forward" size={22} color={colors.primary} />
+            </Pressable>
+          </View>
 
-          <Pressable
-            onPress={registerEstate}
-            style={({ pressed }) => [styles.registerBtn, pressed && { opacity: 0.88 }]}
-          >
-            <Ionicons name="add-circle-outline" size={23} color={colors.primary} />
-            <Text style={styles.registerText}>Register new estate</Text>
-            <Ionicons name="arrow-forward" size={20} color={colors.primary} />
-          </Pressable>
+          {declined && (
+            <View style={styles.declinedBanner}>
+              <View style={styles.declinedIcon}>
+                <Ionicons name="close-circle" size={22} color={colors.danger} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.declinedTitle}>Request declined</Text>
+                <Text style={styles.declinedText}>
+                  You have been declined from joining this estate. You can join a different estate
+                  with another code, or register a new one.
+                </Text>
+              </View>
+            </View>
+          )}
         </View>
       </ScrollView>
 
@@ -271,6 +299,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(124,92,255,0.07)',
     borderWidth: 1,
     borderColor: 'rgba(124,92,255,0.1)',
+  },
+  centerBlock: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   tile: {
     position: 'absolute',
@@ -320,13 +353,38 @@ const styles = StyleSheet.create({
     maxWidth: 320,
     lineHeight: 22,
   },
+  declinedBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginHorizontal: 20,
+    marginTop: 20,
+    marginBottom: 0,
+    padding: 14,
+    borderRadius: 18,
+    backgroundColor: '#FFF5F5',
+    borderWidth: 1,
+    borderColor: 'rgba(220,38,38,0.25)',
+  },
+  declinedIcon: { marginTop: 1 },
+  declinedTitle: {
+    ...typography.bodyStrong,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    fontSize: 15,
+    color: colors.danger,
+  },
+  declinedText: {
+    ...typography.caption,
+    color: colors.text,
+    marginTop: 2,
+    lineHeight: 18,
+  },
   buttons: {
     width: '100%',
     maxWidth: 420,
     alignSelf: 'center',
     paddingHorizontal: spacing.xl,
-    marginTop: 16,
-    paddingTop: 4,
+    marginTop: 20,
   },
   joinWrap: {
     width: '100%',
@@ -339,17 +397,19 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   btnInner: {
+    width: '100%',
     height: 60,
     borderRadius: radius.full,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-    gap: 12,
+    justifyContent: 'space-between',
+    paddingHorizontal: 22,
+    gap: 10,
   },
+  // Text is not spread from typography.button so no inherited width/flex can force wrapping
   joinText: {
-    ...typography.button,
-    flex: 0,
+    flex: 1,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
     color: '#FFFFFF',
     fontSize: 15.5,
     textAlign: 'center',
@@ -360,16 +420,16 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-    gap: 12,
+    justifyContent: 'space-between',
+    paddingHorizontal: 22,
+    gap: 10,
     backgroundColor: '#FFFFFF',
     borderWidth: 1.4,
     borderColor: 'rgba(108,71,255,0.24)',
   },
   registerText: {
-    ...typography.button,
-    flex: 0,
+    flex: 1,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
     color: colors.primary,
     fontSize: 15.5,
     textAlign: 'center',

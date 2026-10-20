@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getApp, getApps, initializeApp } from 'firebase/app';
 import { type Auth, getAuth, getReactNativePersistence, initializeAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { disableNetwork, enableNetwork, getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyDpkNlXsFdkPXN66lsHIwT8WWiCD3XmkxA',
@@ -25,5 +25,14 @@ try {
 }
 
 const db = getFirestore(app);
+
+export const setFirestoreOfflineMode = async (offline: boolean) => {
+  if (offline) {
+    await disableNetwork(db);
+    return;
+  }
+
+  await enableNetwork(db);
+};
 
 export { app, auth, db };
